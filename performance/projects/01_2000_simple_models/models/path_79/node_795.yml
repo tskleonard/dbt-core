@@ -2,10 +2,10 @@ models:
 - columns:
   - name: id
     tests:
-    - unique
+    #- unique
     - not_null
     - relationships:
         field: id
-        to: node_0
+        to: ref('node_0')
   name: node_795
 version: 2
