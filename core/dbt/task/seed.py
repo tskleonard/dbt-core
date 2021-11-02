@@ -10,7 +10,9 @@ from .printer import (
 from dbt.contracts.results import RunStatus
 from dbt.exceptions import InternalException
 from dbt.graph import ResourceTypeSelector
-from dbt.logger import GLOBAL_LOGGER as logger, TextOnly
+from dbt.logger import TextOnly
+from dbt.events.functions import fire_event
+from dbt.events.types import SeedHeader, SeedHeaderSeperator, EmptyLine
 from dbt.node_types import NodeType
 
 
@@ -75,12 +77,13 @@ class SeedTask(RunTask):
 
         header = "Random sample of table: {}.{}".format(schema, alias)
         with TextOnly():
-            logger.info("")
-        logger.info(header)
-        logger.info("-" * len(header))
+            fire_event(EmptyLine())
+        fire_event(SeedHeader(header=header))
+        fire_event(SeedHeaderSeperator(len_header = len(header)))
+
         rand_table.print_table(max_rows=10, max_columns=None)
         with TextOnly():
-            logger.info("")
+            fire_event(EmptyLine())
 
     def show_tables(self, results):
         for result in results:

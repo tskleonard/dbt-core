@@ -1014,6 +1014,22 @@ class ServingDocsExitInfo(InfoLevel, CliEventABC):
         return "Press Ctrl+C to exit.\n\n"
 
 
+@dataclass
+class SeedHeader(InfoLevel, CliEventABC):
+    header: str
+
+    def cli_msg(self) -> str:
+        return self.header
+
+
+@dataclass
+class SeedHeaderSeperator(InfoLevel, CliEventABC):
+    len_header: str
+
+    def cli_msg(self) -> str:
+        return "-" * self.len_header
+
+
 # since mypy doesn't run on every file we need to suggest to mypy that every
 # class gets instantiated. But we don't actually want to run this code.
 # making the conditional `if False` causes mypy to skip it as dead code so
@@ -1132,3 +1148,5 @@ if 1 == 0:
     ServingDocsPortport(port='')
     ServingDocsAccessInfo(port='')
     ServingDocsExitInfo()
+    SeedHeader(header='')
+    SeedHeaderSeperator(len_header=0)
