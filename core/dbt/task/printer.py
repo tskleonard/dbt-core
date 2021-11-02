@@ -10,7 +10,8 @@ from dbt.events.types import (
     EmptyLine, RunResultWarning, RunResultFailure, StatsLine, RunResultError,
     RunResultErrorNoMessage, SQLCompiledPath, CheckNodeTestFailure, FirstRunResultError,
     AfterFirstRunResultError, EndOfRunSummary, PrintStartLine, PrintHookStartLine,
-    PrintHookOK
+    PrintHookOK, PrintErrorTestResult, PrintPassTestResult, PrintWarnTestResult, 
+    PrintFailureTestResult, PrintErrorModelResultLine, PrintModelResultLine
 )
 
 from dbt.tracking import InvocationProcessor
@@ -20,37 +21,6 @@ from dbt import utils
 from dbt.contracts.results import (
     FreshnessStatus, NodeStatus, TestStatus
 )
-
-
-def print_fancy_output_line(
-        msg: str, status: str, logger_fn: Callable, index: Optional[int],
-        total: Optional[int], execution_time: Optional[float] = None,
-        truncate: bool = False
-) -> None:
-    if index is None or total is None:
-        progress = ''
-    else:
-        progress = '{} of {} '.format(index, total)
-    prefix = "{timestamp} | {progress}{message}".format(
-        timestamp=get_timestamp(),
-        progress=progress,
-        message=msg)
-
-    truncate_width = ui.printer_width() - 3
-    justified = prefix.ljust(ui.printer_width(), ".")
-    if truncate and len(justified) > truncate_width:
-        justified = justified[:truncate_width] + '...'
-
-    if execution_time is None:
-        status_time = ""
-    else:
-        status_time = " in {execution_time:0.2f}s".format(
-            execution_time=execution_time)
-
-    output = "{justified} [{status}{status_time}]".format(
-        justified=justified, status=status, status_time=status_time)
-
-    logger_fn(output)
 
 
 def get_counts(flat_nodes) -> str:
@@ -110,47 +80,46 @@ def print_test_result_line(
     model = result.node
 
     if result.status == TestStatus.Error:
-        info = "ERROR"
-        color = ui.red
-        logger_fn = logger.error
+        fire_event(PrintErrorTestResult(name=model.name,
+                                   index=index,
+                                   num_models=total,
+                                   execution_time=result.execution_time))
     elif result.status == TestStatus.Pass:
-        info = 'PASS'
-        color = ui.green
-        logger_fn = logger.info
+        fire_event(PrintPassTestResult(name=model.name,
+                                   index=index,
+                                   num_models=total,
+                                   execution_time=result.execution_time))
     elif result.status == TestStatus.Warn:
-        info = f'WARN {result.failures}'
-        color = ui.yellow
-        logger_fn = logger.warning
+        fire_event(PrintWarnTestResult(name=model.name,
+                                   index=index,
+                                   num_models=total,
+                                   execution_time=result.execution_time,
+                                   failures=result.failures))
     elif result.status == TestStatus.Fail:
-        info = f'FAIL {result.failures}'
-        color = ui.red
-        logger_fn = logger.error
+        fire_event(PrintFailureTestResult(name=model.name,
+                                   index=index,
+                                   num_models=total,
+                                   execution_time=result.execution_time,
+                                   failures=result.failures))
     else:
         raise RuntimeError("unexpected status: {}".format(result.status))
-
-    print_fancy_output_line(
-        "{info} {name}".format(info=info, name=model.name),
-        color(info),
-        logger_fn,
-        index,
-        total,
-        result.execution_time)
-
 
 def print_model_result_line(
     result, description: str, index: int, total: int
 ) -> None:
-    info, status, logger_fn = get_printable_result(
-        result, 'created', 'creating')
 
-    print_fancy_output_line(
-        "{info} {description}".format(info=info, description=description),
-        status,
-        logger_fn,
-        index,
-        total,
-        result.execution_time)
-
+    if result.status == NodeStatus.Error:
+        fire_event(PrintErrorModelResultLine(description=description,
+                                             status=result.status,
+                                             index=index,
+                                             total=total,
+                                             execution_time=result.execution_time))
+    else:
+        fire_event(PrintModelResultLine(description=description,
+                                        status=result.status,
+                                        index=index,
+                                        total=total,
+                                        execution_time=result.execution_time))
 
 def print_snapshot_result_line(
     result, description: str, index: int, total: int
@@ -298,17 +267,6 @@ def print_run_result_error(
                 first = False
             else:
                 fire_event(AfterFirstRunResultError(msg=line))
-
-
-def print_skip_caused_by_error(
-    model, schema: str, relation: str, index: int, num_models: int, result
-) -> None:
-    msg = ('SKIP relation {}.{} due to ephemeral model error'
-           .format(schema, relation))
-    print_fancy_output_line(
-        msg, ui.red('ERROR SKIP'), logger.error, index, num_models)
-    print_run_result_error(result, newline=False)
-
 
 def print_run_end_messages(results, keyboard_interrupt: bool = False) -> None:
     errors, warnings = [], []

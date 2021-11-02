@@ -1229,6 +1229,127 @@ class SkippingDetails(InfoLevel, CliEventABC):
                                         total=self.num_models)
 
 
+@dataclass
+class PrintErrorTestResult(ErrorLevel, CliEventABC):
+    name: str
+    index: int
+    num_models: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = "ERROR"
+        msg = f"{info} {self.name}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red(info),
+                                        index=self.index,
+                                        total=self.num_models,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintPassTestResult(InfoLevel, CliEventABC):
+    name: str
+    index: int
+    num_models: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = "PASS"
+        msg = f"{info} {self.name}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.green(info),
+                                        index=self.index,
+                                        total=self.num_models,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintWarnTestResult(WarnLevel, CliEventABC):
+    name: str
+    index: int
+    num_models: int
+    execution_time: int
+    failures: List[str]
+
+    def cli_msg(self) -> str:
+        info = f'WARN {self.failures}'
+        msg = f"{info} {self.name}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.yellow(info),
+                                        index=self.index,
+                                        total=self.num_models,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintFailureTestResult(ErrorLevel, CliEventABC):
+    name: str
+    index: int
+    num_models: int
+    execution_time: int
+    failures: List[str]
+
+    def cli_msg(self) -> str:
+        info = f'FAIL {self.failures}'
+        msg = f"{info} {self.name}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red(info),
+                                        index=self.index,
+                                        total=self.num_models,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintSkipBecauseError(ErrorLevel, CliEventABC):
+    schema: str
+    relation: int
+    index: int
+    total: int
+
+    def cli_msg(self) -> str:
+        msg = f'SKIP relation {self.schema}.{self.relation} due to ephemeral model error'
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red('ERROR SKIP'),
+                                        index=self.index,
+                                        total=self.total)
+
+
+@dataclass
+class PrintErrorModelResultLine(ErrorLevel, CliEventABC):
+    description: str
+    status: str
+    index: int
+    total: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = f"ERROR creating"
+        msg = f"{info} {self.description}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red(self.status.upper()),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintModelResultLine(InfoLevel, CliEventABC):
+    description: str
+    status: str
+    index: int
+    total: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = f"OK created"
+        msg = f"{self.info} {self.description}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.green(self.status.upper()),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
 # since mypy doesn't run on every file we need to suggest to mypy that every
 # class gets instantiated. But we don't actually want to run this code.
 # making the conditional `if False` causes mypy to skip it as dead code so
@@ -1361,3 +1482,10 @@ if 1 == 0:
     PrintStartLine(description='', index=0, total=int)
     PrintHookStartLine(statement='', index=0, total=int, truncate=False)
     PrintHookOK(statement='', index=0, total=int, execution_time=0, truncate=False)
+    PrintErrorTestResult(name='', index=0, num_models=0, execution_time=0)
+    PrintPassTestResult(name='', index=0, num_models=0, execution_time=0)
+    PrintWarnTestResult(name='', index=0, num_models=0, execution_time=0, failures=[])
+    PrintFailureTestResult(name='', index=0, num_models=0, execution_time=0, failures=[])
+    PrintSkipBecauseError(schema='', relation='', index=0, total=0)
+    PrintErrorModelResultLine(description='', status='', index=0, total=0, execution_time=0)
+    PrintModelResultLine(description='', status='', index=0, total=0, execution_time=0)
