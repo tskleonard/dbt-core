@@ -1,3 +1,4 @@
+from os import truncate
 from typing import Dict, Optional, Tuple, Callable
 from dbt.logger import (
     DbtStatusMessage,
@@ -8,7 +9,8 @@ from dbt.events.functions import fire_event
 from dbt.events.types import (
     EmptyLine, RunResultWarning, RunResultFailure, StatsLine, RunResultError,
     RunResultErrorNoMessage, SQLCompiledPath, CheckNodeTestFailure, FirstRunResultError,
-    AfterFirstRunResultError, EndOfRunSummary, PrintStartLine, PrintHookStartLine
+    AfterFirstRunResultError, EndOfRunSummary, PrintStartLine, PrintHookStartLine,
+    PrintHookOK
 )
 
 from dbt.tracking import InvocationProcessor
@@ -81,28 +83,12 @@ def print_hook_start_line(statement: str, index: int, total: int) -> None:
 def print_hook_end_line(
     statement: str, status: str, index: int, total: int, execution_time: float
 ) -> None:
-    msg = 'OK hook: {}'.format(statement)
     # hooks don't fail into this path, so always green
-    print_fancy_output_line(msg, ui.green(status), logger.info, index, total,
-                            execution_time=execution_time, truncate=True)
-
-
-def print_skip_line(
-    node, schema: str, relation: str, index: int, num_models: int
-) -> None:
-    if node.resource_type in NodeType.refable():
-        msg = f'SKIP relation {schema}.{relation}'
-    else:
-        msg = f'SKIP {node.resource_type} {node.name}'
-    print_fancy_output_line(
-        msg, ui.yellow('SKIP'), logger.info, index, num_models)
-
-
-def print_cancel_line(model) -> None:
-    msg = 'CANCEL query {}'.format(model)
-    print_fancy_output_line(
-        msg, ui.red('CANCEL'), logger.error, index=None, total=None)
-
+    fire_event(PrintHookOK(statement=statement,
+                           index=index,
+                           total=total,
+                           execution_time=execution_time,
+                           truncate=True))
 
 def get_printable_result(
         result, success: str, error: str) -> Tuple[str, str, Callable]:

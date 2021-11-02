@@ -10,6 +10,7 @@ from dbt.contracts.graph.manifest import Manifest
 from dbt.contracts.results import (
     NodeStatus, RunResult, collect_timing_info, RunStatus
 )
+from dbt.events.functions import fire_event
 from dbt.exceptions import (
     NotImplementedException, CompilationException, RuntimeException,
     InternalException
@@ -20,10 +21,9 @@ from dbt.events.types import (
     DbtProjectError, DbtProjectErrorException, DbtProfileError, DbtProfileErrorException,
     ProfileListTitle, ListSingleProfile, NoDefinedProfiles, ProfileHelpMessage,
     CatchableExceptionOnRun, InternalExceptionOnRun, GenericExceptionOnRun,
-    NodeConnectionReleaseError, PrintDebugStackTrace
+    NodeConnectionReleaseError, PrintDebugStackTrace, SkippingDetails
 )
-from .printer import print_skip_caused_by_error, print_skip_line
-
+from .printer import print_skip_caused_by_error
 
 from dbt.adapters.factory import register_adapter
 from dbt.config import RuntimeConfig, Project
@@ -413,13 +413,13 @@ class BaseRunner(metaclass=ABCMeta):
                             self.skip_cause.node.unique_id)
                 )
             else:
-                print_skip_line(
-                    self.node,
-                    schema_name,
-                    node_name,
-                    self.node_index,
-                    self.num_nodes
-                )
+                fire_event(SkippingDetails(
+                    node=self.node,
+                    schema_name=schema_name,
+                    node_name=node_name,
+                    node_index=self.node_index,
+                    num_nodes=self.num_nodes
+                ))
 
         node_result = self.skip_result(self.node, error_message)
         return node_result

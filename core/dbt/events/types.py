@@ -1138,7 +1138,7 @@ def format_fancy_output_line(
         msg: str, status: str, index: Optional[int],
         total: Optional[int], execution_time: Optional[float] = None,
         truncate: bool = False
-) -> None:
+) -> str:
     if index is None or total is None:
         progress = ''
     else:
@@ -1191,6 +1191,42 @@ class PrintHookStartLine(InfoLevel, CliEventABC):
                                         total=self.total,
                                         truncate=self.truncate)
 
+
+@dataclass
+class PrintHookOK(InfoLevel, CliEventABC):
+    statement: str
+    index: int
+    total: int
+    execution_time: int
+    truncate: bool
+
+    def cli_msg(self) -> str:
+        msg = 'OK hook: {}'.format(self.statement)
+        return format_fancy_output_line(msg=msg,
+                                        status='RUN',
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time,
+                                        truncate=self.truncate)
+
+
+@dataclass
+class SkippingDetails(InfoLevel, CliEventABC):
+    node: str
+    schema_name: str
+    node_name: str
+    node_index: int
+    num_nodes: int
+
+    def cli_msg(self) -> str:
+        if self.node.resource_type in NodeType.refable():
+            msg = f'SKIP relation {self.schema}.{self.relation}'
+        else:
+            msg = f'SKIP {self.resource_type} {self.node_name}'
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.yellow('SKIP'),
+                                        index=self.index,
+                                        total=self.num_models)
 
 
 # since mypy doesn't run on every file we need to suggest to mypy that every
@@ -1324,3 +1360,4 @@ if 1 == 0:
     AfterFirstRunResultError(msg='')
     PrintStartLine(description='', index=0, total=int)
     PrintHookStartLine(statement='', index=0, total=int, truncate=False)
+    PrintHookOK(statement='', index=0, total=int, execution_time=0, truncate=False)
