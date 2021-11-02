@@ -2,6 +2,8 @@ from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from typing import Any, List, Optional, Dict
 from dbt import ui
+from dbt.adapters.base.relation import Info
+from dbt import utils
 
 
 # types to represent log levels
@@ -1030,6 +1032,167 @@ class SeedHeaderSeperator(InfoLevel, CliEventABC):
         return "-" * self.len_header
 
 
+@dataclass
+class RunResultWarning(WarnLevel, CliEventABC):
+    resource_type: str
+    node_name: str
+    path: str
+
+    def cli_msg(self) -> str:
+        info = 'Warning'
+        return ui.yellow(f"{info} in {self.resource_type} {self.node_name} ({self.path})")
+
+
+@dataclass
+class RunResultFailure(ErrorLevel, CliEventABC):
+    resource_type: str
+    node_name: str
+    path: str
+
+    def cli_msg(self) -> str:
+        info = 'Failure'
+        return ui.red(f"{info} in {self.resource_type} {self.node_name} ({self.path})")
+
+
+@dataclass
+class StatsLine(InfoLevel, CliEventABC):
+    stats: Dict
+
+    def cli_msg(self) -> str:
+        stats_line = ("\nDone. PASS={pass} WARN={warn} ERROR={error} SKIP={skip} TOTAL={total}")
+        return stats_line.format(**self.stats)
+
+
+@dataclass
+class RunResultError(ErrorLevel, CliEventABC):
+    msg: str
+
+    def cli_msg(self) -> str:
+        return f"  {self.message}"
+
+
+@dataclass
+class RunResultErrorNoMessage(ErrorLevel, CliEventABC):
+    status: str
+
+    def cli_msg(self) -> str:
+        return f"  Status: {self.status}"
+
+
+@dataclass
+class SQLCompiledPath(InfoLevel, CliEventABC):
+    path: str
+
+    def cli_msg(self) -> str:
+        return f"  compiled SQL at {self.path}"
+
+
+@dataclass
+class CheckNodeTestFailure(InfoLevel, CliEventABC):
+    relation_name: str
+
+    def cli_msg(self) -> str:
+        msg = f"select * from {self.relation_name}"
+        border = '-' * len(msg)
+        return f"  See test failures:\n  {border}\n  {msg}\n  {border}"
+
+
+@dataclass
+class FirstRunResultError(ErrorLevel, CliEventABC):
+    msg: str
+
+    def cli_msg(self) -> str:
+        return ui.yellow(self.msg)
+
+
+@dataclass
+class AfterFirstRunResultError(ErrorLevel, CliEventABC):
+    msg: str
+
+    def cli_msg(self) -> str:
+        return self.msg
+
+
+@dataclass
+class EndOfRunSummary(InfoLevel, CliEventABC):
+    num_errors: int
+    num_warnings: int
+    keyboard_interrupt: bool = False
+
+    def cli_msg(self) -> str:
+        error_plural = utils.pluralize(self.num_errors, 'error')
+        warn_plural = utils.pluralize(self.num_warnings, 'warning')
+        if self.keyboard_interrupt:
+            message = ui.yellow('Exited because of keyboard interrupt.')
+        elif self.num_errors > 0:
+            message = ui.red("Completed with {} and {}:".format(
+                error_plural, warn_plural))
+        elif self.num_warnings > 0:
+            message = ui.yellow('Completed with {}:'.format(warn_plural))
+        else:
+            message = ui.green('Completed successfully')
+        return message
+
+
+def format_fancy_output_line(
+        msg: str, status: str, index: Optional[int],
+        total: Optional[int], execution_time: Optional[float] = None,
+        truncate: bool = False
+) -> None:
+    if index is None or total is None:
+        progress = ''
+    else:
+        progress = '{} of {} '.format(index, total)
+    prefix = "{timestamp} | {progress}{message}".format(
+        timestamp=get_timestamp(),
+        progress=progress,
+        message=msg)
+
+    truncate_width = ui.printer_width() - 3
+    justified = prefix.ljust(ui.printer_width(), ".")
+    if truncate and len(justified) > truncate_width:
+        justified = justified[:truncate_width] + '...'
+
+    if execution_time is None:
+        status_time = ""
+    else:
+        status_time = " in {execution_time:0.2f}s".format(
+            execution_time=execution_time)
+
+    output = "{justified} [{status}{status_time}]".format(
+        justified=justified, status=status, status_time=status_time)
+
+    return output
+
+
+@dataclass
+class PrintStartLine(InfoLevel, CliEventABC):
+    description: str
+    index: int
+    total: int
+
+    def cli_msg(self) -> str:
+        msg = "START {self.description}"
+        return format_fancy_output_line(msg=msg, status='RUN', index=self.index, total=self.total)
+
+
+@dataclass
+class PrintHookStartLine(InfoLevel, CliEventABC):
+    statement: str
+    index: int
+    total: int
+    truncate: bool
+
+    def cli_msg(self) -> str:
+        msg = "START hook: {self.statement}"
+        return format_fancy_output_line(msg=msg,
+                                        status='RUN',
+                                        index=self.index,
+                                        total=self.total,
+                                        truncate=self.truncate)
+
+
+
 # since mypy doesn't run on every file we need to suggest to mypy that every
 # class gets instantiated. But we don't actually want to run this code.
 # making the conditional `if False` causes mypy to skip it as dead code so
@@ -1150,3 +1313,14 @@ if 1 == 0:
     ServingDocsExitInfo()
     SeedHeader(header='')
     SeedHeaderSeperator(len_header=0)
+    RunResultWarning(resource_type='', node_name='', path='')
+    RunResultFailure(resource_type='', node_name='', path='')
+    StatsLine(stats={})
+    RunResultError(msg='')
+    RunResultErrorNoMessage(status='')
+    SQLCompiledPath(path='')
+    CheckNodeTestFailure(relation_name='')
+    FirstRunResultError(msg='')
+    AfterFirstRunResultError(msg='')
+    PrintStartLine(description='', index=0, total=int)
+    PrintHookStartLine(statement='', index=0, total=int, truncate=False)

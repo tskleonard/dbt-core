@@ -1,11 +1,15 @@
 from typing import Dict, Optional, Tuple, Callable
 from dbt.logger import (
-    GLOBAL_LOGGER as logger,
     DbtStatusMessage,
     TextOnly,
     get_timestamp,
 )
-from dbt.node_types import NodeType
+from dbt.events.functions import fire_event
+from dbt.events.types import (
+    EmptyLine, RunResultWarning, RunResultFailure, StatsLine, RunResultError,
+    RunResultErrorNoMessage, SQLCompiledPath, CheckNodeTestFailure, FirstRunResultError,
+    AfterFirstRunResultError, EndOfRunSummary, PrintStartLine, PrintHookStartLine
+)
 
 from dbt.tracking import InvocationProcessor
 from dbt import ui
@@ -67,14 +71,11 @@ def get_counts(flat_nodes) -> str:
 
 
 def print_start_line(description: str, index: int, total: int) -> None:
-    msg = "START {}".format(description)
-    print_fancy_output_line(msg, 'RUN', logger.info, index, total)
+    fire_event(PrintStartLine(description=description, index=index, total=total))
 
 
 def print_hook_start_line(statement: str, index: int, total: int) -> None:
-    msg = 'START hook: {}'.format(statement)
-    print_fancy_output_line(
-        msg, 'RUN', logger.info, index, total, truncate=True)
+    fire_event(PrintHookStartLine(statement=statement, index=index, total=total, truncate=True))
 
 
 def print_hook_end_line(
@@ -266,8 +267,7 @@ def print_run_status_line(results) -> None:
         stats[result_type] += 1
         stats['total'] += 1
 
-    stats_line = "\nDone. PASS={pass} WARN={warn} ERROR={error} SKIP={skip} TOTAL={total}"  # noqa
-    logger.info(stats_line.format(**stats))
+    fire_event(StatsLine(stats=stats))
 
 
 def print_run_result_error(
@@ -275,51 +275,43 @@ def print_run_result_error(
 ) -> None:
     if newline:
         with TextOnly():
-            logger.info("")
+            fire_event(EmptyLine())
 
     if result.status == NodeStatus.Fail or (
         is_warning and result.status == NodeStatus.Warn
     ):
         if is_warning:
-            color = ui.yellow
-            info = 'Warning'
-            logger_fn = logger.warning
+            fire_event(RunResultWarning(resource_type=result.node.resource_type,
+                                        node_name=result.node.name,
+                                        path=result.node.original_file_path))
         else:
-            color = ui.red
-            info = 'Failure'
-            logger_fn = logger.error
-        logger_fn(color("{} in {} {} ({})").format(
-            info,
-            result.node.resource_type,
-            result.node.name,
-            result.node.original_file_path))
+            fire_event(RunResultFailure(resource_type=result.node.resource_type,
+                                        node_name=result.node.name,
+                                        path=result.node.original_file_path))
 
         if result.message:
-            logger.error(f"  {result.message}")
+            fire_event(RunResultError(msg=result.message))
         else:
-            logger.error(f"  Status: {result.status}")
+            fire_event(RunResultErrorNoMessage(status=result.status))
 
         if result.node.build_path is not None:
             with TextOnly():
-                logger.info("")
-            logger.info("  compiled SQL at {}".format(
-                result.node.compiled_path))
+                fire_event(EmptyLine())
+            fire_event(SQLCompiledPath(path=result.node.compiled_path))
 
         if result.node.should_store_failures:
             with TextOnly():
-                logger.info("")
-            msg = f"select * from {result.node.relation_name}"
-            border = '-' * len(msg)
-            logger.info(f"  See test failures:\n  {border}\n  {msg}\n  {border}")
+                fire_event(EmptyLine())
+            fire_event(CheckNodeTestFailure(relation_name=result.node.relation_name))
 
     elif result.message is not None:
         first = True
         for line in result.message.split("\n"):
             if first:
-                logger.error(ui.yellow(line))
+                fire_event(FirstRunResultError(msg=line))
                 first = False
             else:
-                logger.error(line)
+                fire_event(AfterFirstRunResultError(msg=line))
 
 
 def print_skip_caused_by_error(
@@ -330,26 +322,6 @@ def print_skip_caused_by_error(
     print_fancy_output_line(
         msg, ui.red('ERROR SKIP'), logger.error, index, num_models)
     print_run_result_error(result, newline=False)
-
-
-def print_end_of_run_summary(
-    num_errors: int, num_warnings: int, keyboard_interrupt: bool = False
-) -> None:
-    error_plural = utils.pluralize(num_errors, 'error')
-    warn_plural = utils.pluralize(num_warnings, 'warning')
-    if keyboard_interrupt:
-        message = ui.yellow('Exited because of keyboard interrupt.')
-    elif num_errors > 0:
-        message = ui.red("Completed with {} and {}:".format(
-            error_plural, warn_plural))
-    elif num_warnings > 0:
-        message = ui.yellow('Completed with {}:'.format(warn_plural))
-    else:
-        message = ui.green('Completed successfully')
-
-    with TextOnly():
-        logger.info('')
-    logger.info('{}'.format(message))
 
 
 def print_run_end_messages(results, keyboard_interrupt: bool = False) -> None:
@@ -369,9 +341,11 @@ def print_run_end_messages(results, keyboard_interrupt: bool = False) -> None:
             warnings.append(r)
 
     with DbtStatusMessage(), InvocationProcessor():
-        print_end_of_run_summary(len(errors),
-                                 len(warnings),
-                                 keyboard_interrupt)
+        with TextOnly():
+            fire_event(EmptyLine())
+        fire_event(EndOfRunSummary(num_errors=len(errors),
+                                   num_warnings=len(warnings),
+                                   keyboard_interrupt=keyboard_interrupt))
 
         for error in errors:
             print_run_result_error(error, is_warning=False)
