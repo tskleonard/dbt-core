@@ -693,6 +693,7 @@ class InvalidRefInTestNode(WarnLevel, CliEventABC):
     msg: str
 
     def cli_msg(self) -> str:
+<<<<<<< HEAD
         return ui.warning_tag(self.msg)
 
 
@@ -992,6 +993,27 @@ class CompileComplete(InfoLevel, CliEventABC):
 class FreshnessCheckComplete(InfoLevel, CliEventABC):
     def cli_msg(self) -> str:
         return "Done."
+=======
+        return warning_tag(self.msg)
+class ServingDocsPortport(InfoLevel, CliEventABC):
+    port: str
+
+    def cli_msg(self) -> str:
+        return f"Serving docs at 0.0.0.0:{self.port}"
+
+
+@dataclass
+class ServingDocsAccessInfo(InfoLevel, CliEventABC):
+    port: str
+
+    def cli_msg(self) -> str:
+        return f"To access from your browser, navigate to:  http://localhost:{self.port}"
+
+
+class ServingDocsExitInfo(InfoLevel, CliEventABC):
+    def cli_msg(self) -> str:
+        return "Press Ctrl+C to exit.\n\n"
+>>>>>>> 748d3cfd (add struct logging to docs serve)
 
 
 # since mypy doesn't run on every file we need to suggest to mypy that every
@@ -1072,6 +1094,7 @@ if 1 == 0:
     PartialParsingDeletedExposure(unique_id='')
     InvalidDisabledSourceInTestNode(msg='')
     InvalidRefInTestNode(msg='')
+<<<<<<< HEAD
     MessageHandleGenericException(build_path='', unique_id='', exc=Exception(''))
     DetailsHandleGenericException()
     RunningOperationCaughtError(exc=Exception(''))
@@ -1109,3 +1132,8 @@ if 1 == 0:
     BuildingCatalog()
     CompileComplete()
     FreshnessCheckComplete()
+=======
+    ServingDocsPortport(port='')
+    ServingDocsAccessInfo(port='')
+    ServingDocsExitInfo()
+>>>>>>> 748d3cfd (add struct logging to docs serve)
