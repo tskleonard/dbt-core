@@ -3,7 +3,8 @@ from copy import deepcopy
 from typing import List, Iterable, Optional, Dict, Set, Tuple, Any
 import threading
 
-from dbt.logger import CACHE_LOGGER as logger
+from dbt.events.functions import fire_event
+from dbt.events.types import foo
 from dbt.utils import lowercase
 import dbt.exceptions
 

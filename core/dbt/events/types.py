@@ -386,7 +386,7 @@ class CacheMiss(DebugLevel, CliEventABC):
 
 
 @dataclass
-class ListRelations(TestLevel, CliEventABC):
+class ListRelations(DebugLevel, CliEventABC):
     database: Optional[str]
     schema: str
     relations: List[
@@ -495,4 +495,20 @@ if 1 == 0:
     )
     MacroEventInfo(msg="")
     MacroEventDebug(msg="")
+    NewConnection(conn_type="", conn_name="")
+    ConnectionReused(conn_name="")
+    ConnectionLeftOpen(conn_name="")
+    ConnectionClosed(conn_name="")
+    RollbackFailed(conn_name="")
+    ConnectionClosed2(conn_name="")
+    ConnectionLeftOpen2(conn_name="")
+    Rollback(conn_name="")
+    CacheMiss(conn_name="", database="", schema="")
+    ListRelations(database="", schema="", relations=[])
+    ConnectionUsed(conn_type="", conn_name="")
+    SQLQuery(conn_name="", sql="")
+    SQLQueryStatus(status="", elapsed=0.1)
+    SQLCommit(conn_name="")
+    ColTypeChange(orig_type="", new_type="", table="")
     SchemaCreation(relation="")
+    SchemaDrop(relation="")
