@@ -1,41 +1,48 @@
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any, List, Optional
 
+# TODO: somehow, this causes unit tests to fail
+# from dbt.contracts.connection import AdapterResponse
+
+# TODO: turn on once typing issues are resolved.. causes mypy crash
+# from dbt.adapters.base.relation import BaseRelation
 
 # types to represent log levels
 
+
 # in preparation for #3977
-class TestLevel():
+class TestLevel:
     def level_tag(self) -> str:
         return "test"
 
 
-class DebugLevel():
+class DebugLevel:
     def level_tag(self) -> str:
         return "debug"
 
 
-class InfoLevel():
+class InfoLevel:
     def level_tag(self) -> str:
         return "info"
 
 
-class WarnLevel():
+class WarnLevel:
     def level_tag(self) -> str:
         return "warn"
 
 
-class ErrorLevel():
+class ErrorLevel:
     def level_tag(self) -> str:
         return "error"
 
 
 @dataclass
-class ShowException():
-    exc_info: Any = None
-    stack_info: Any = None
-    extra: Any = None
+class ShowException:
+    def __post_init__(self):
+        self.exc_info: Any = None
+        self.stack_info: Any = None
+        self.extra: Any = None
 
 
 # The following classes represent the data necessary to describe a
@@ -248,7 +255,9 @@ class SelectorAlertUpto3UnusedNodes(InfoLevel, CliEventABC):
     def cli_msg(self) -> str:
         summary_nodes_str = ("\n  - ").join(self.node_names[:3])
         and_more_str = (
-            f"\n  - and {len(self.node_names) - 3} more" if len(self.node_names) > 4 else ""
+            f"\n  - and {len(self.node_names) - 3} more"
+            if len(self.node_names) > 4
+            else ""
         )
         return (
             f"\nSome tests were excluded because at least one parent is not selected. "
@@ -263,10 +272,7 @@ class SelectorAlertAllUnusedNodes(DebugLevel, CliEventABC):
 
     def cli_msg(self) -> str:
         debug_nodes_str = ("\n  - ").join(self.node_names)
-        return (
-            f"Full list of tests that were excluded:"
-            f"\n  - {debug_nodes_str}"
-        )
+        return f"Full list of tests that were excluded:" f"\n  - {debug_nodes_str}"
 
 
 @dataclass
@@ -284,6 +290,14 @@ class SelectorReportInvalidSelector(InfoLevel, CliEventABC):
 
 
 @dataclass
+class MacroEventDebug(DebugLevel, CliEventABC):
+    msg: str
+
+    def cli_msg(self) -> str:
+        return self.msg
+
+
+@dataclass
 class MacroEventInfo(InfoLevel, CliEventABC):
     msg: str
 
@@ -292,11 +306,156 @@ class MacroEventInfo(InfoLevel, CliEventABC):
 
 
 @dataclass
-class MacroEventDebug(DebugLevel, CliEventABC):
-    msg: str
+class NewConnection(DebugLevel, CliEventABC):
+    conn_type: str
+    conn_name: str
 
     def cli_msg(self) -> str:
-        return self.msg
+        return f'Acquiring new {self.conn_type} connection "{self.conn_name}"'
+
+
+@dataclass
+class ConnectionReused(DebugLevel, CliEventABC):
+    conn_name: str
+
+    def cli_msg(self) -> str:
+        return f"Re-using an available connection from the pool (formerly {self.conn_name})"
+
+
+@dataclass
+class ConnectionLeftOpen(DebugLevel, CliEventABC):
+    conn_name: Optional[str]
+
+    def cli_msg(self) -> str:
+        return f"Connection '{self.conn_name}' was left open."
+
+
+@dataclass
+class ConnectionClosed(DebugLevel, CliEventABC):
+    conn_name: Optional[str]
+
+    def cli_msg(self) -> str:
+        return f"Connection '{self.conn_name}' was properly closed."
+
+
+@dataclass
+class RollbackFailed(ShowException, DebugLevel, CliEventABC):
+    conn_name: Optional[str]
+
+    def cli_msg(self) -> str:
+        return f"Failed to rollback '{self.conn_name}'"
+
+
+# TODO: can we combine this with ConnectionClosed?
+@dataclass
+class ConnectionClosed2(DebugLevel, CliEventABC):
+    conn_name: Optional[str]
+
+    def cli_msg(self) -> str:
+        return f"On {self.conn_name}: Close"
+
+
+# TODO: can we combine this with ConnectionLeftOpen?
+@dataclass
+class ConnectionLeftOpen2(DebugLevel, CliEventABC):
+    conn_name: Optional[str]
+
+    def cli_msg(self) -> str:
+        return f"On {self.conn_name}: No close available on handle"
+
+
+@dataclass
+class Rollback(DebugLevel, CliEventABC):
+    conn_name: Optional[str]
+
+    def cli_msg(self) -> str:
+        return f"On {self.conn_name}: ROLLBACK"
+
+
+@dataclass
+class CacheMiss(DebugLevel, CliEventABC):
+    conn_name: Any  # TODO mypy says this is `Callable[[], str]`??  ¯\_(ツ)_/¯
+    database: Optional[str]
+    schema: str
+
+    def cli_msg(self) -> str:
+        return (
+            f'On "{self.conn_name}": cache miss for schema '
+            '"{self.database}.{self.schema}", this is inefficient'
+        )
+
+
+@dataclass
+class ListRelations(TestLevel, CliEventABC):
+    database: Optional[str]
+    schema: str
+    relations: List[
+        Any
+    ]  # TODO: should be BaseRelation, but it breaks mypy (see imports)
+
+    def cli_msg(self) -> str:
+        return f"with database={self.database}, schema={self.schema}, relations={self.relations}"
+
+
+@dataclass
+class ConnectionUsed(DebugLevel, CliEventABC):
+    conn_type: str
+    conn_name: Optional[str]
+
+    def cli_msg(self) -> str:
+        return f'Using {self.conn_type} connection "{self.conn_name}"'
+
+
+@dataclass
+class SQLQuery(DebugLevel, CliEventABC):
+    conn_name: Optional[str]
+    sql: str
+
+    def cli_msg(self) -> str:
+        return f"On {self.conn_name}: {self.sql}"
+
+
+@dataclass
+class SQLQueryStatus(DebugLevel, CliEventABC):
+    status: Any  # TODO should be Union[AdapterResponse, str], breaks unittests (see imports)
+    elapsed: float
+
+    def cli_msg(self) -> str:
+        return f"SQL status: {self.status} in {self.elapsed} seconds"
+
+
+@dataclass
+class SQLCommit(DebugLevel, CliEventABC):
+    conn_name: str
+
+    def cli_msg(self) -> str:
+        return f"On {self.conn_name}: COMMIT"
+
+
+@dataclass
+class ColTypeChange(DebugLevel, CliEventABC):
+    orig_type: str
+    new_type: str
+    table: str
+
+    def cli_msg(self) -> str:
+        return f"Changing col type from {self.orig_type} to {self.new_type} in table {self.table}"
+
+
+@dataclass
+class SchemaCreation(DebugLevel, CliEventABC):
+    relation: Any  # TODO should be BaseRelation, but it breaks mypy (see imports)
+
+    def cli_msg(self) -> str:
+        return f'Creating schema "{self.relation}"'
+
+
+@dataclass
+class SchemaDrop(DebugLevel, CliEventABC):
+    relation: Any  # TODO should be BaseRelation, but it breaks mypy (see imports)
+
+    def cli_msg(self) -> str:
+        return f'Dropping schema "{self.relation}".'
 
 
 # since mypy doesn't run on every file we need to suggest to mypy that every
@@ -315,22 +474,25 @@ if 1 == 0:
     ManifestLoaded()
     ManifestChecked()
     ManifestFlatGraphBuilt()
-    ReportPerformancePath(path='')
-    GitSparseCheckoutSubdirectory(subdir='')
-    GitProgressCheckoutRevision(revision='')
-    GitProgressUpdatingExistingDependency(dir='')
-    GitProgressPullingNewDependency(dir='')
-    GitNothingToDo(sha='')
-    GitProgressUpdatedCheckoutRange(start_sha='', end_sha='')
-    GitProgressCheckedOutAt(end_sha='')
-    SystemErrorRetrievingModTime(path='')
-    SystemCouldNotWrite(path='', reason='', exc=Exception(''))
-    SystemExecutingCmd(cmd=[''])
-    SystemStdOutMsg(bmsg=b'')
-    SystemStdErrMsg(bmsg=b'')
+    ReportPerformancePath(path="")
+    GitSparseCheckoutSubdirectory(subdir="")
+    GitProgressCheckoutRevision(revision="")
+    GitProgressUpdatingExistingDependency(dir="")
+    GitProgressPullingNewDependency(dir="")
+    GitNothingToDo(sha="")
+    GitProgressUpdatedCheckoutRange(start_sha="", end_sha="")
+    GitProgressCheckedOutAt(end_sha="")
+    SystemErrorRetrievingModTime(path="")
+    SystemCouldNotWrite(path="", reason="", exc=Exception(""))
+    SystemExecutingCmd(cmd=[""])
+    SystemStdOutMsg(bmsg=b"")
+    SystemStdErrMsg(bmsg=b"")
     SystemReportReturnCode(code=0)
     SelectorAlertUpto3UnusedNodes(node_names=[])
     SelectorAlertAllUnusedNodes(node_names=[])
-    SelectorReportInvalidSelector(selector_methods={'': ''}, spec_method='', raw_spec='')
-    MacroEventInfo(msg='')
-    MacroEventDebug(msg='')
+    SelectorReportInvalidSelector(
+        selector_methods={"": ""}, spec_method="", raw_spec=""
+    )
+    MacroEventInfo(msg="")
+    MacroEventDebug(msg="")
+    SchemaCreation(relation="")
