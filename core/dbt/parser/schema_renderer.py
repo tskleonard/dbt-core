@@ -6,7 +6,11 @@ from dbt.config.renderer import BaseRenderer, Keypath
 # This class renders dictionaries derived from "schema" yaml files.
 # It calls Jinja on strings (in deep_map_render), except for certain
 # keys which are skipped because they need to be rendered later
-# (tests and description).
+# (tests and description). Test configs are rendered in the
+# generic test builder code, but skips the keyword args. The test
+# keyword args are rendered to capture refs in render_test_update.
+# Keyword args are finally rendered at compilation time.
+# Descriptions are not rendered until 'process_docs'.
 class SchemaYamlRenderer(BaseRenderer):
     def __init__(self, context: Dict[str, Any], key: str) -> None:
         super().__init__(context)

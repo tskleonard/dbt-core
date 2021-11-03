@@ -316,6 +316,9 @@ class SchemaParser(SimpleParser[GenericTestBlock, ParsedGenericTestNode]):
         # this is the ContextConfig that is used in render_update
         config: ContextConfig = self.initial_config(fqn)
 
+        # builder.args contains keyword args for the test macro,
+        # not configs which have been separated out in the builder.
+        # The keyword args are not completely rendered until compilation.
         metadata = {
             'namespace': builder.namespace,
             'name': builder.name,
@@ -632,7 +635,8 @@ class YamlReader(metaclass=ABCMeta):
             if 'name' not in entry:
                 raise ParsingException("Entry did not contain a name")
 
-            # render the data
+            # Render the data (except for tests and descriptions).
+            # See the SchemaYamlRenderer
             entry = self.render_entry(entry)
             if self.schema_yaml_vars.env_vars:
                 self.schema_parser.manifest.env_vars.update(self.schema_yaml_vars.env_vars)

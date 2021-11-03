@@ -410,6 +410,9 @@ class ParsedSeedNode(ParsedNode):
 @dataclass
 class TestMetadata(dbtClassMixin, Replaceable):
     name: str
+    # kwargs are the args that are left in the test builder after
+    # removing configs. They are set from the test builder when
+    # the test node is created.
     kwargs: Dict[str, Any] = field(default_factory=dict)
     namespace: Optional[str] = None
 
