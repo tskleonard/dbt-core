@@ -1514,6 +1514,49 @@ class PrintCancelLine(ErrorLevel, CliEventABC):
                                         total=None)
 
 
+@dataclass
+class DefaultSelector(InfoLevel, CliEventABC):
+    name: str
+
+    def cli_msg(self) -> str:
+        return f"Using default selector {self.name}"
+
+
+@dataclass
+class NodeStart(DebugLevel, CliEventABC):
+    unique_id: str
+
+    def cli_msg(self) -> str:
+        return f"Began running node {self.unique_id}"
+
+
+@dataclass
+class NodeFinished(DebugLevel, CliEventABC):
+    unique_id: str
+
+    def cli_msg(self) -> str:
+        return f"Finished running node {self.unique_id}"
+
+
+@dataclass
+class QueryCancelationUnsupported(InfoLevel, CliEventABC):
+    type: str
+
+    def cli_msg(self) -> str:
+        msg = (f"The {self.type} adapter does not support query "
+               "cancellation. Some queries may still be "
+               "running!")
+        return ui.yellow(msg)
+
+
+@dataclass
+class ConcurrencyLine(InfoLevel, CliEventABC):
+    concurrency_line: str
+
+    def cli_msg(self) -> str:
+        return self.concurrency_line
+
+
 # since mypy doesn't run on every file we need to suggest to mypy that every
 # class gets instantiated. But we don't actually want to run this code.
 # making the conditional `if False` causes mypy to skip it as dead code so
@@ -1668,3 +1711,8 @@ if 1 == 0:
     PrintHookEndWarnLine(source_name='', table_name='', index=0, total=0, execution_time=0)
     PrintHookEndPassLine(source_name='', table_name='', index=0, total=0, execution_time=0)
     PrintCancelLine(conn_name='')
+    DefaultSelector(name='')
+    NodeStart(unique_id='')
+    NodeFinished(unique_id='')
+    QueryCancelationUnsupported(type='')
+    ConcurrencyLine(concurrency_line='')
