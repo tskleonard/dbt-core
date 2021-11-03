@@ -1413,9 +1413,9 @@ class TestContext(ProviderContext):
     # This only provides a namespace with macros in the test node
     # 'depends_on.macros' by using the TestMacroNamespace
     def _build_test_namespace(self):
-        depends_on_macros = []
+        depends_on_macros = ['macro.dbt.get_where_subquery']
         if self.model.depends_on and self.model.depends_on.macros:
-            depends_on_macros = self.model.depends_on.macros
+            depends_on_macros.extend(self.model.depends_on.macros)
         lookup_macros = depends_on_macros.copy()
         for macro_unique_id in lookup_macros:
             lookup_macro = self.macro_resolver.macros.get(macro_unique_id)
