@@ -16,19 +16,27 @@ class SnapshotRunner(ModelRunner):
         model = result.node
         cfg = model.config.to_dict(omit_none=True)
         if result.status == NodeStatus.Error:
-            fire_event(PrintSnapshotErrorResultLine(status=result.status,
-                                                    description=self.get_node_representation(),
-                                                    cfg=cfg,
-                                                    index=self.node_index,
-                                                    total=self.num_nodes,
-                                                    execution_time=result.execution_time))
+            fire_event(
+                PrintSnapshotErrorResultLine(
+                    status=result.status,
+                    description=self.get_node_representation(),
+                    cfg=cfg,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
         else:
-            fire_event(PrintSnapshotResultLine(status=result.message,
-                                               description=self.get_node_representation(),
-                                               cfg=cfg,
-                                               index=self.node_index,
-                                               total=self.num_nodes,
-                                               execution_time=result.execution_time))
+            fire_event(
+                PrintSnapshotResultLine(
+                    status=result.message,
+                    description=self.get_node_representation(),
+                    cfg=cfg,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
 
 
 class SnapshotTask(RunTask):

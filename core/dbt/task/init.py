@@ -250,8 +250,12 @@ class InitTask(BaseTask):
             profile_template = yaml.safe_load(f)
         self.create_profile_from_profile_template(profile_template, profile_name)
         profiles_filepath = Path(flags.PROFILES_DIR) / Path("profiles.yml")
-        fire_event(ProfileWrittenWithProjectTemplateYAML(name=profile_name,
-                                                         path=str(profiles_filepath)))
+        fire_event(
+            ProfileWrittenWithProjectTemplateYAML(
+                name=profile_name,
+                path=str(profiles_filepath)
+            )
+        )
 
     def ask_for_adapter_choice(self) -> str:
         """Ask the user which adapter (database) they'd like to use."""

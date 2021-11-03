@@ -4,7 +4,7 @@ from typing import Any, List, Optional, Dict
 from dbt import ui
 from dbt import utils
 from dbt.node_types import NodeType
-from dbt.events.functions import format_fancy_output_line
+from dbt.events.format import format_fancy_output_line
 
 
 # types to represent log levels

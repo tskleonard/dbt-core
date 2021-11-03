@@ -23,9 +23,13 @@ class SeedRunner(ModelRunner):
         return "seed file {}".format(self.get_node_representation())
 
     def before_execute(self):
-        fire_event(PrintStartLine(description=self.describe_node(),
-                                  index=self.node_index,
-                                  total=self.num_nodes))
+        fire_event(
+            PrintStartLine(
+                description=self.describe_node(),
+                index=self.node_index,
+                total=self.num_nodes
+            )
+        )
 
     def _build_run_model_result(self, model, context):
         result = super()._build_run_model_result(model, context)
@@ -39,19 +43,27 @@ class SeedRunner(ModelRunner):
     def print_result_line(self, result):
         model = result.node
         if result.status == NodeStatus.Error:
-            fire_event(PrintSeedErrorResultLine(status=result.status,
-                                                index=self.node_index,
-                                                total=self.num_nodes,
-                                                execution_time=result.execution_time,
-                                                schema=self.node.schema,
-                                                relation=model.alias))
+            fire_event(
+                PrintSeedErrorResultLine(
+                    status=result.status,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time,
+                    schema=self.node.schema,
+                    relation=model.alias
+                )
+            )
         else:
-            fire_event(PrintSeedResultLine(status=result.message,
-                                           index=self.node_index,
-                                           total=self.num_nodes,
-                                           execution_time=result.execution_time,
-                                           schema=self.node.schema,
-                                           relation=model.alias))
+            fire_event(
+                PrintSeedResultLine(
+                    status=result.message,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time,
+                    schema=self.node.schema,
+                    relation=model.alias
+                )
+            )
 
 
 class SeedTask(RunTask):
