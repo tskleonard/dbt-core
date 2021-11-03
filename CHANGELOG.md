@@ -8,7 +8,7 @@
 - Changes unit tests using `assertRaisesRegexp` to `assertRaisesRegex`
 
 ### Under the hood
-Bump artifact schema versions for 1.0.0
+- Bump artifact schema versions (manifest to v4, run-results to v4, sources to v3) for 1.0.0 ([#4191](https://github.com/dbt-labs/dbt-core/pull/4191))
 
 Contributors:
 - [@kadero](https://github.com/kadero) ([3955](https://github.com/dbt-labs/dbt-core/pull/3955))
