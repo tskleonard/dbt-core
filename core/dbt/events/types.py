@@ -1557,6 +1557,89 @@ class ConcurrencyLine(InfoLevel, CliEventABC):
         return self.concurrency_line
 
 
+@dataclass
+class StarterProjectPath(DebugLevel, CliEventABC):
+    dir: str
+
+    def cli_msg(self) -> str:
+        return f"Starter project path: {self.dir}"
+
+
+@dataclass
+class ConfigFolderDirectory(InfoLevel, CliEventABC):
+    dir: str
+
+    def cli_msg(self) -> str:
+        return f"Creating dbt configuration folder at {self.dir}"
+
+
+@dataclass
+class NoSampleProfileFound(InfoLevel, CliEventABC):
+    adapter: str
+
+    def cli_msg(self) -> str:
+        return f"No sample profile found for {self.adapter}."
+
+
+@dataclass
+class ProfileWrittenWithSample(InfoLevel, CliEventABC):
+    name: str
+    path: str
+
+    def cli_msg(self) -> str:
+        return (f"Profile {self.name} written to {self.path} "
+                "using target's sample configuration. Once updated, you'll be able to "
+                "start developing with dbt.")
+
+
+@dataclass
+class ProfileWrittenWithTargetTemplateYAML(InfoLevel, CliEventABC):
+    name: str
+    path: str
+
+    def cli_msg(self) -> str:
+        return (f"Profile {self.name} written to {self.path} using target's "
+                "profile_template.yml and your supplied values. Run 'dbt debug' to "
+                "validate the connection.")
+
+
+@dataclass
+class ProfileWrittenWithProjectTemplateYAML(InfoLevel, CliEventABC):
+    name: str
+    path: str
+
+    def cli_msg(self) -> str:
+        return (f"Profile {self.name} written to {self.path} using project's "
+                "profile_template.yml and your supplied values. Run 'dbt debug' to "
+                "validate the connection.")
+
+
+class SettingUpProfile(InfoLevel, CliEventABC):
+    def cli_msg(self) -> str:
+        return "Setting up your profile."
+
+
+class InvalidProfileTemplateYAML(InfoLevel, CliEventABC):
+    def cli_msg(self) -> str:
+        return "Invalid profile_template.yml in project."
+
+
+@dataclass
+class ProjectNameAlreadyExists(InfoLevel, CliEventABC):
+    name: str
+
+    def cli_msg(self) -> str:
+        return f"A project called {self.name} already exists here."
+
+
+@dataclass
+class GetAddendum(InfoLevel, CliEventABC):
+    msg: str
+
+    def cli_msg(self) -> str:
+        return self.msg
+
+
 # since mypy doesn't run on every file we need to suggest to mypy that every
 # class gets instantiated. But we don't actually want to run this code.
 # making the conditional `if False` causes mypy to skip it as dead code so
@@ -1716,3 +1799,13 @@ if 1 == 0:
     NodeFinished(unique_id='')
     QueryCancelationUnsupported(type='')
     ConcurrencyLine(concurrency_line='')
+    StarterProjectPath(dir='')
+    ConfigFolderDirectory(dir='')
+    NoSampleProfileFound(adapter='')
+    ProfileWrittenWithSample(name='', path='')
+    ProfileWrittenWithTargetTemplateYAML(name='', path='')
+    ProfileWrittenWithProjectTemplateYAML(name='', path='')
+    SettingUpProfile()
+    InvalidProfileTemplateYAML()
+    ProjectNameAlreadyExists(name='')
+    GetAddendum(msg='')
