@@ -82,6 +82,7 @@ class EnvVarTest(BasePPTest):
 
         # set an env_var in a schema file
         self.copy_file('test-files/env_var_schema.yml', 'models/schema.yml')
+        self.copy_file('test-files/env_var_model_one.sql', 'models/model_one.sql')
         with self.assertRaises(ParsingException):
             results = self.run_dbt(["--partial-parse", "run"])
 
@@ -99,7 +100,7 @@ class EnvVarTest(BasePPTest):
         self.copy_file('test-files/env_var-sources.yml', 'models/sources.yml')
         self.run_dbt(['--partial-parse', 'seed'])
         results = self.run_dbt(["--partial-parse", "run"])
-        self.assertEqual(len(results), 2)
+        self.assertEqual(len(results), 3)
         manifest = get_manifest()
         expected_env_vars = {"ENV_VAR_TEST": "second", "TEST_SCHEMA_VAR": "view", "ENV_VAR_DATABASE": "dbt", "ENV_VAR_SEVERITY": "warn"}
         self.assertEqual(expected_env_vars, manifest.env_vars)
@@ -209,6 +210,16 @@ class EnvVarTest(BasePPTest):
         manifest = get_manifest()
         macro = manifest.macros[macro_id]
         self.assertEqual(macro.meta, {"some_key": "dumdedum"})
+
+        # Add a schema file with a test on model_color and env_var in test enabled config
+        self.copy_file('test-files/env_var_model_test.yml', 'models/schema.yml')
+        results = self.run_dbt(["--partial-parse", "run"])
+        self.assertEqual(len(results), 3)
+        manifest = get_manifest()
+        model_color = manifest.nodes['model.test.model_color']
+        schema_file = manifest.files[model_color.patch_path]
+        expected_env_vars = {'models': {'model_one': ['TEST_SCHEMA_VAR', 'ENV_VAR_COLOR'], 'model_color': ['ENV_VAR_ENABLED']}, 'exposures': {'proxy_for_dashboard': ['ENV_VAR_OWNER']}}
+        self.assertEqual(expected_env_vars, schema_file.env_vars)
 
 
         # delete the env vars to cleanup

@@ -357,7 +357,7 @@ class SchemaParser(SimpleParser[GenericTestBlock, ParsedGenericTestNode]):
                 if '.' in search_name:  # source file definitions
                     (search_name, _) = search_name.split('.')
             else:
-                search_name = target.search_name
+                search_name = target.name
                 yaml_key = target.yaml_key
             for var in env_vars.keys():
                 schema_file.add_env_var(var, yaml_key, search_name)
@@ -886,8 +886,11 @@ class NodePatchParser(
                     # re-application of the patch in partial parsing.
                     node.patch_path = source_file.file_id
             else:
-                # Should we issue a warning message here?
-                return
+                raise ParsingException(
+                    f"Did not find matching node for patch with name '{patch.name}' "
+                    f"in the '{patch.yaml_key}' section of "
+                    f"file '{source_file.path.original_file_path}'"
+                )
 
         # patches can't be overwritten
         node = self.manifest.nodes.get(unique_id)
