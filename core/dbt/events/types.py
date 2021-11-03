@@ -1002,6 +1002,13 @@ class DepsSetDownloadDirectory(DebugLevel, CliEventABC):
         return f"Set downloads directory='{self.path}'"
 
 
+class EnsureGitInstalled(ErrorLevel, CliEventABC):
+    def cli_msg(self) -> str:
+        return ('Make sure git is installed on your machine. More '
+                'information: '
+                'https://docs.getdbt.com/docs/package-management')
+
+
 
 # since mypy doesn't run on every file we need to suggest to mypy that every
 # class gets instantiated. But we don't actually want to run this code.
@@ -1119,3 +1126,4 @@ if 1 == 0:
     CompileComplete()
     FreshnessCheckComplete()
     DepsSetDownloadDirectory(path='')
+    EnsureGitInstalled()
