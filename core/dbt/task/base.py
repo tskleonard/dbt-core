@@ -10,7 +10,6 @@ from dbt.contracts.graph.manifest import Manifest
 from dbt.contracts.results import (
     NodeStatus, RunResult, collect_timing_info, RunStatus
 )
-from dbt.events.functions import fire_event
 from dbt.exceptions import (
     NotImplementedException, CompilationException, RuntimeException,
     InternalException
@@ -410,13 +409,11 @@ class BaseRunner(metaclass=ABCMeta):
                             self.skip_cause.node.unique_id)
                 )
             else:
-                fire_event(SkippingDetails(
-                    node=self.node,
-                    schema_name=schema_name,
-                    node_name=node_name,
-                    node_index=self.node_index,
-                    num_nodes=self.num_nodes
-                ))
+                fire_event(SkippingDetails(resource_type=self.node.resource_type,
+                                           schema=schema_name,
+                                           node_name=node_name,
+                                           index=self.node_index,
+                                           total=self.num_nodes))
 
         node_result = self.skip_result(self.node, error_message)
         return node_result

@@ -2,8 +2,9 @@ from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from typing import Any, List, Optional, Dict
 from dbt import ui
-from dbt.adapters.base.relation import Info
 from dbt import utils
+from dbt.node_types import NodeType
+from dbt.logger import get_timestamp
 
 
 # types to represent log levels
@@ -996,7 +997,8 @@ class FreshnessCheckComplete(InfoLevel, CliEventABC):
         return "Done."
 
 
-class ServingDocsPortport(InfoLevel, CliEventABC):
+@dataclass
+class ServingDocsPort(InfoLevel, CliEventABC):
     port: str
 
     def cli_msg(self) -> str:
@@ -1026,7 +1028,7 @@ class SeedHeader(InfoLevel, CliEventABC):
 
 @dataclass
 class SeedHeaderSeperator(InfoLevel, CliEventABC):
-    len_header: str
+    len_header: int
 
     def cli_msg(self) -> str:
         return "-" * self.len_header
@@ -1068,7 +1070,7 @@ class RunResultError(ErrorLevel, CliEventABC):
     msg: str
 
     def cli_msg(self) -> str:
-        return f"  {self.message}"
+        return f"  {self.msg}"
 
 
 @dataclass
@@ -1143,6 +1145,7 @@ def format_fancy_output_line(
         progress = ''
     else:
         progress = '{} of {} '.format(index, total)
+    # TODO: remove this formatting once we rip out all the old logger
     prefix = "{timestamp} | {progress}{message}".format(
         timestamp=get_timestamp(),
         progress=progress,
@@ -1193,8 +1196,9 @@ class PrintHookStartLine(InfoLevel, CliEventABC):
 
 
 @dataclass
-class PrintHookOK(InfoLevel, CliEventABC):
+class PrintHookEndLine(InfoLevel, CliEventABC):
     statement: str
+    status: str
     index: int
     total: int
     execution_time: int
@@ -1203,7 +1207,7 @@ class PrintHookOK(InfoLevel, CliEventABC):
     def cli_msg(self) -> str:
         msg = 'OK hook: {}'.format(self.statement)
         return format_fancy_output_line(msg=msg,
-                                        status='RUN',
+                                        status=ui.green(self.status),
                                         index=self.index,
                                         total=self.total,
                                         execution_time=self.execution_time,
@@ -1212,21 +1216,21 @@ class PrintHookOK(InfoLevel, CliEventABC):
 
 @dataclass
 class SkippingDetails(InfoLevel, CliEventABC):
-    node: str
-    schema_name: str
+    resource_type: str
+    schema: str
     node_name: str
-    node_index: int
-    num_nodes: int
+    index: int
+    total: int
 
     def cli_msg(self) -> str:
-        if self.node.resource_type in NodeType.refable():
-            msg = f'SKIP relation {self.schema}.{self.relation}'
+        if self.resource_type in NodeType.refable():
+            msg = f'SKIP relation {self.schema}.{self.node_name}'
         else:
             msg = f'SKIP {self.resource_type} {self.node_name}'
         return format_fancy_output_line(msg=msg,
                                         status=ui.yellow('SKIP'),
                                         index=self.index,
-                                        total=self.num_models)
+                                        total=self.total)
 
 
 @dataclass
@@ -1302,7 +1306,7 @@ class PrintFailureTestResult(ErrorLevel, CliEventABC):
 @dataclass
 class PrintSkipBecauseError(ErrorLevel, CliEventABC):
     schema: str
-    relation: int
+    relation: str
     index: int
     total: int
 
@@ -1315,7 +1319,7 @@ class PrintSkipBecauseError(ErrorLevel, CliEventABC):
 
 
 @dataclass
-class PrintErrorModelResultLine(ErrorLevel, CliEventABC):
+class PrintModelErrorResultLine(ErrorLevel, CliEventABC):
     description: str
     status: str
     index: int
@@ -1323,7 +1327,7 @@ class PrintErrorModelResultLine(ErrorLevel, CliEventABC):
     execution_time: int
 
     def cli_msg(self) -> str:
-        info = f"ERROR creating"
+        info = "ERROR creating"
         msg = f"{info} {self.description}"
         return format_fancy_output_line(msg=msg,
                                         status=ui.red(self.status.upper()),
@@ -1341,13 +1345,173 @@ class PrintModelResultLine(InfoLevel, CliEventABC):
     execution_time: int
 
     def cli_msg(self) -> str:
-        info = f"OK created"
-        msg = f"{self.info} {self.description}"
+        info = "OK created"
+        msg = f"{info} {self.description}"
         return format_fancy_output_line(msg=msg,
-                                        status=ui.green(self.status.upper()),
+                                        status=ui.green(self.status),
                                         index=self.index,
                                         total=self.total,
                                         execution_time=self.execution_time)
+
+
+@dataclass
+class PrintSnapshotErrorResultLine(ErrorLevel, CliEventABC):
+    status: str
+    description: str
+    cfg: Dict
+    index: int
+    total: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = 'ERROR snapshotting'
+        msg = "{info} {description}".format(info=info, description=self.description, **self.cfg)
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red(self.status.upper()),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintSnapshotResultLine(InfoLevel, CliEventABC):
+    status: str
+    description: str
+    cfg: Dict
+    index: int
+    total: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = 'OK snapshotted'
+        msg = "{info} {description}".format(info=info, description=self.description, **self.cfg)
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.green(self.status),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintSeedErrorResultLine(ErrorLevel, CliEventABC):
+    status: str
+    index: int
+    total: int
+    execution_time: int
+    schema: str
+    relation: str
+
+    def cli_msg(self) -> str:
+        info = 'ERROR loading'
+        msg = f"{info} seed file {self.schema}.{self.relation}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red(self.status.upper()),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintSeedResultLine(InfoLevel, CliEventABC):
+    status: str
+    index: int
+    total: int
+    execution_time: int
+    schema: str
+    relation: str
+
+    def cli_msg(self) -> str:
+        info = 'OK loaded'
+        msg = f"{info} seed file {self.schema}.{self.relation}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.green(self.status),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintHookEndErrorLine(ErrorLevel, CliEventABC):
+    source_name: str
+    table_name: str
+    index: int
+    total: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = 'ERROR'
+        msg = f"{info} freshness of {self.source_name}.{self.table_name}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red(info),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintHookEndErrorStaleLine(ErrorLevel, CliEventABC):
+    source_name: str
+    table_name: str
+    index: int
+    total: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = 'ERROR STALE'
+        msg = f"{info} freshness of {self.source_name}.{self.table_name}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red(info),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintHookEndWarnLine(WarnLevel, CliEventABC):
+    source_name: str
+    table_name: str
+    index: int
+    total: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = 'WARN'
+        msg = f"{info} freshness of {self.source_name}.{self.table_name}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.yellow(info),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintHookEndPassLine(InfoLevel, CliEventABC):
+    source_name: str
+    table_name: str
+    index: int
+    total: int
+    execution_time: int
+
+    def cli_msg(self) -> str:
+        info = 'PASS'
+        msg = f"{info} freshness of {self.source_name}.{self.table_name}"
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.green(info),
+                                        index=self.index,
+                                        total=self.total,
+                                        execution_time=self.execution_time)
+
+
+@dataclass
+class PrintCancelLine(ErrorLevel, CliEventABC):
+    conn_name: str
+
+    def cli_msg(self) -> str:
+        msg = 'CANCEL query {}'.format(self.conn_name)
+        return format_fancy_output_line(msg=msg,
+                                        status=ui.red('CANCEL'),
+                                        index=None,
+                                        total=None)
 
 
 # since mypy doesn't run on every file we need to suggest to mypy that every
@@ -1465,7 +1629,7 @@ if 1 == 0:
     BuildingCatalog()
     CompileComplete()
     FreshnessCheckComplete()
-    ServingDocsPortport(port='')
+    ServingDocsPort(port='')
     ServingDocsAccessInfo(port='')
     ServingDocsExitInfo()
     SeedHeader(header='')
@@ -1479,13 +1643,28 @@ if 1 == 0:
     CheckNodeTestFailure(relation_name='')
     FirstRunResultError(msg='')
     AfterFirstRunResultError(msg='')
-    PrintStartLine(description='', index=0, total=int)
-    PrintHookStartLine(statement='', index=0, total=int, truncate=False)
-    PrintHookOK(statement='', index=0, total=int, execution_time=0, truncate=False)
+    PrintStartLine(description='', index=0, total=0)
+    PrintHookStartLine(statement='', index=0, total=0, truncate=False)
+    PrintHookEndLine(statement='', status='', index=0, total=0, execution_time=0, truncate=False)
+    SkippingDetails(resource_type='', schema='', node_name='', index=0, total=0)
     PrintErrorTestResult(name='', index=0, num_models=0, execution_time=0)
     PrintPassTestResult(name='', index=0, num_models=0, execution_time=0)
     PrintWarnTestResult(name='', index=0, num_models=0, execution_time=0, failures=[])
     PrintFailureTestResult(name='', index=0, num_models=0, execution_time=0, failures=[])
     PrintSkipBecauseError(schema='', relation='', index=0, total=0)
-    PrintErrorModelResultLine(description='', status='', index=0, total=0, execution_time=0)
+    PrintModelErrorResultLine(description='', status='', index=0, total=0, execution_time=0)
     PrintModelResultLine(description='', status='', index=0, total=0, execution_time=0)
+    PrintSnapshotErrorResultLine(status='',
+                                 description='',
+                                 cfg={},
+                                 index=0,
+                                 total=0,
+                                 execution_time=0)
+    PrintSnapshotResultLine(status='', description='', cfg={}, index=0, total=0, execution_time=0)
+    PrintSeedErrorResultLine(status='', index=0, total=0, execution_time=0, schema='', relation='')
+    PrintSeedResultLine(status='', index=0, total=0, execution_time=0, schema='', relation='')
+    PrintHookEndErrorLine(source_name='', table_name='', index=0, total=0, execution_time=0)
+    PrintHookEndErrorStaleLine(source_name='', table_name='', index=0, total=0, execution_time=0)
+    PrintHookEndWarnLine(source_name='', table_name='', index=0, total=0, execution_time=0)
+    PrintHookEndPassLine(source_name='', table_name='', index=0, total=0, execution_time=0)
+    PrintCancelLine(conn_name='')

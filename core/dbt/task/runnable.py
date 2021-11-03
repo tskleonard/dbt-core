@@ -11,7 +11,6 @@ from pathlib import PosixPath, WindowsPath
 from .printer import (
     print_run_result_error,
     print_run_end_messages,
-    print_cancel_line,
 )
 
 from dbt import ui
@@ -30,6 +29,8 @@ from dbt.logger import (
     NodeCount,
     print_timestamped_line,
 )
+from dbt.events.functions import fire_event
+from dbt.events.types import PrintCancelLine
 
 from dbt.contracts.graph.compiled import CompileResultNode
 from dbt.contracts.graph.manifest import Manifest
@@ -352,7 +353,7 @@ class GraphRunnableTask(ManifestTask):
                             continue
                     # if we don't have a manifest/don't have a node, print
                     # anyway.
-                    print_cancel_line(conn_name)
+                    fire_event(PrintCancelLine(conn_name=conn_name))
 
         pool.join()
 

@@ -6,7 +6,7 @@ from dbt.include.global_project import DOCS_INDEX_FILE_PATH
 from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer
 from dbt.events.functions import fire_event
-from dbt.events.types import ServingDocsPortport, ServingDocsAccessInfo, ServingDocsExitInfo
+from dbt.events.types import ServingDocsPort, ServingDocsAccessInfo, ServingDocsExitInfo
 
 from dbt.task.base import ConfiguredTask
 
@@ -19,8 +19,8 @@ class ServeTask(ConfiguredTask):
 
         shutil.copyfile(DOCS_INDEX_FILE_PATH, 'index.html')
 
-        fire_event(ServingDocsPortport(port))
-        fire_event(ServingDocsAccessInfo(port))
+        fire_event(ServingDocsPort(port=port))
+        fire_event(ServingDocsAccessInfo(port=port))
         fire_event(ServingDocsExitInfo())
 
         # mypy doesn't think SimpleHTTPRequestHandler is ok here, but it is

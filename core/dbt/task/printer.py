@@ -1,26 +1,22 @@
-from os import truncate
-from typing import Dict, Optional, Tuple, Callable
+from typing import Dict
 from dbt.logger import (
     DbtStatusMessage,
     TextOnly,
-    get_timestamp,
 )
 from dbt.events.functions import fire_event
 from dbt.events.types import (
     EmptyLine, RunResultWarning, RunResultFailure, StatsLine, RunResultError,
     RunResultErrorNoMessage, SQLCompiledPath, CheckNodeTestFailure, FirstRunResultError,
-    AfterFirstRunResultError, EndOfRunSummary, PrintStartLine, PrintHookStartLine,
-    PrintHookOK, PrintErrorTestResult, PrintPassTestResult, PrintWarnTestResult, 
-    PrintFailureTestResult, PrintErrorModelResultLine, PrintModelResultLine
+    AfterFirstRunResultError, EndOfRunSummary
 )
 
 from dbt.tracking import InvocationProcessor
-from dbt import ui
 from dbt import utils
 
 from dbt.contracts.results import (
-    FreshnessStatus, NodeStatus, TestStatus
+    NodeStatus
 )
+from dbt.node_types import NodeType
 
 
 def get_counts(flat_nodes) -> str:
@@ -40,159 +36,6 @@ def get_counts(flat_nodes) -> str:
         [utils.pluralize(v, k) for k, v in counts.items()])
 
     return stat_line
-
-
-def print_start_line(description: str, index: int, total: int) -> None:
-    fire_event(PrintStartLine(description=description, index=index, total=total))
-
-
-def print_hook_start_line(statement: str, index: int, total: int) -> None:
-    fire_event(PrintHookStartLine(statement=statement, index=index, total=total, truncate=True))
-
-
-def print_hook_end_line(
-    statement: str, status: str, index: int, total: int, execution_time: float
-) -> None:
-    # hooks don't fail into this path, so always green
-    fire_event(PrintHookOK(statement=statement,
-                           index=index,
-                           total=total,
-                           execution_time=execution_time,
-                           truncate=True))
-
-def get_printable_result(
-        result, success: str, error: str) -> Tuple[str, str, Callable]:
-    if result.status == NodeStatus.Error:
-        info = 'ERROR {}'.format(error)
-        status = ui.red(result.status.upper())
-        logger_fn = logger.error
-    else:
-        info = 'OK {}'.format(success)
-        status = ui.green(result.message)
-        logger_fn = logger.info
-
-    return info, status, logger_fn
-
-
-def print_test_result_line(
-        result, index: int, total: int
-) -> None:
-    model = result.node
-
-    if result.status == TestStatus.Error:
-        fire_event(PrintErrorTestResult(name=model.name,
-                                   index=index,
-                                   num_models=total,
-                                   execution_time=result.execution_time))
-    elif result.status == TestStatus.Pass:
-        fire_event(PrintPassTestResult(name=model.name,
-                                   index=index,
-                                   num_models=total,
-                                   execution_time=result.execution_time))
-    elif result.status == TestStatus.Warn:
-        fire_event(PrintWarnTestResult(name=model.name,
-                                   index=index,
-                                   num_models=total,
-                                   execution_time=result.execution_time,
-                                   failures=result.failures))
-    elif result.status == TestStatus.Fail:
-        fire_event(PrintFailureTestResult(name=model.name,
-                                   index=index,
-                                   num_models=total,
-                                   execution_time=result.execution_time,
-                                   failures=result.failures))
-    else:
-        raise RuntimeError("unexpected status: {}".format(result.status))
-
-def print_model_result_line(
-    result, description: str, index: int, total: int
-) -> None:
-
-    if result.status == NodeStatus.Error:
-        fire_event(PrintErrorModelResultLine(description=description,
-                                             status=result.status,
-                                             index=index,
-                                             total=total,
-                                             execution_time=result.execution_time))
-    else:
-        fire_event(PrintModelResultLine(description=description,
-                                        status=result.status,
-                                        index=index,
-                                        total=total,
-                                        execution_time=result.execution_time))
-
-def print_snapshot_result_line(
-    result, description: str, index: int, total: int
-) -> None:
-    model = result.node
-
-    info, status, logger_fn = get_printable_result(
-        result, 'snapshotted', 'snapshotting')
-    cfg = model.config.to_dict(omit_none=True)
-
-    msg = "{info} {description}".format(
-        info=info, description=description, **cfg)
-    print_fancy_output_line(
-        msg,
-        status,
-        logger_fn,
-        index,
-        total,
-        result.execution_time)
-
-
-def print_seed_result_line(result, schema_name: str, index: int, total: int):
-    model = result.node
-
-    info, status, logger_fn = get_printable_result(result, 'loaded', 'loading')
-
-    print_fancy_output_line(
-        "{info} seed file {schema}.{relation}".format(
-            info=info,
-            schema=schema_name,
-            relation=model.alias),
-        status,
-        logger_fn,
-        index,
-        total,
-        result.execution_time)
-
-
-def print_freshness_result_line(result, index: int, total: int) -> None:
-    if result.status == FreshnessStatus.RuntimeErr:
-        info = 'ERROR'
-        color = ui.red
-        logger_fn = logger.error
-    elif result.status == FreshnessStatus.Error:
-        info = 'ERROR STALE'
-        color = ui.red
-        logger_fn = logger.error
-    elif result.status == FreshnessStatus.Warn:
-        info = 'WARN'
-        color = ui.yellow
-        logger_fn = logger.warning
-    else:
-        info = 'PASS'
-        color = ui.green
-        logger_fn = logger.info
-
-    if hasattr(result, 'node'):
-        source_name = result.node.source_name
-        table_name = result.node.name
-    else:
-        source_name = result.source_name
-        table_name = result.table_name
-
-    msg = f"{info} freshness of {source_name}.{table_name}"
-
-    print_fancy_output_line(
-        msg,
-        color(info),
-        logger_fn,
-        index,
-        total,
-        execution_time=result.execution_time
-    )
 
 
 def interpret_run_result(result) -> str:
@@ -267,6 +110,7 @@ def print_run_result_error(
                 first = False
             else:
                 fire_event(AfterFirstRunResultError(msg=line))
+
 
 def print_run_end_messages(results, keyboard_interrupt: bool = False) -> None:
     errors, warnings = [], []
