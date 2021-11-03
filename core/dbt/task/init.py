@@ -102,8 +102,12 @@ class InitTask(BaseTask):
             else:
                 with open(profiles_filepath, "w") as f:
                     f.write(sample_profile)
-                fire_event(ProfileWrittenWithSample(name=profile_name,
-                                                    path=str(profiles_filepath)))
+                fire_event(
+                    ProfileWrittenWithSample(
+                        name=profile_name,
+                        path=str(profiles_filepath)
+                    )
+                )
 
     def get_addendum(self, project_name: str, profiles_path: str) -> str:
         open_cmd = dbt.clients.system.open_dir_cmd()
@@ -208,8 +212,12 @@ class InitTask(BaseTask):
                 profile_template = yaml.safe_load(f)
             self.create_profile_from_profile_template(profile_template, profile_name)
             profiles_filepath = Path(flags.PROFILES_DIR) / Path("profiles.yml")
-            fire_event(ProfileWrittenWithTargetTemplateYAML(name=profile_name,
-                                                            path=str(profiles_filepath)))
+            fire_event(
+                ProfileWrittenWithTargetTemplateYAML(
+                    name=profile_name,
+                    path=str(profiles_filepath)
+                )
+            )
         else:
             # For adapters without a profile_template.yml defined, fallback on
             # sample_profiles.yml

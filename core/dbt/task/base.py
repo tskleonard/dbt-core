@@ -306,9 +306,13 @@ class BaseRunner(metaclass=ABCMeta):
         return str(e)
 
     def _handle_generic_exception(self, e, ctx):
-        fire_event(GenericExceptionOnRun(build_path=self.node.build_path,
-                                         unique_id=self.node.unique_id,
-                                         exc=e))
+        fire_event(
+            GenericExceptionOnRun(
+                build_path=self.node.build_path,
+                unique_id=self.node.unique_id,
+                exc=e
+            )
+        )
         fire_event(PrintDebugStackTrace())
 
         return str(e)
@@ -391,10 +395,14 @@ class BaseRunner(metaclass=ABCMeta):
             # if this model was skipped due to an upstream ephemeral model
             # failure, print a special 'error skip' message.
             if self._skip_caused_by_ephemeral_failure():
-                fire_event(PrintSkipBecauseError(schema=schema_name,
-                                                 relation=node_name,
-                                                 index=self.node_index,
-                                                 total=self.num_nodes))
+                fire_event(
+                    PrintSkipBecauseError(
+                        schema=schema_name,
+                        relation=node_name,
+                        index=self.node_index,
+                        total=self.num_nodes
+                    )
+                )
                 print_run_result_error(result=self.skip_cause, newline=False)
                 if self.skip_cause is None:  # mypy appeasement
                     raise InternalException(
@@ -409,11 +417,15 @@ class BaseRunner(metaclass=ABCMeta):
                             self.skip_cause.node.unique_id)
                 )
             else:
-                fire_event(SkippingDetails(resource_type=self.node.resource_type,
-                                           schema=schema_name,
-                                           node_name=node_name,
-                                           index=self.node_index,
-                                           total=self.num_nodes))
+                fire_event(
+                    SkippingDetails(
+                        resource_type=self.node.resource_type,
+                        schema=schema_name,
+                        node_name=node_name,
+                        index=self.node_index,
+                        total=self.num_nodes
+                    )
+                )
 
         node_result = self.skip_result(self.node, error_message)
         return node_result

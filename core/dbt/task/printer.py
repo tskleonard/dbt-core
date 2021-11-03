@@ -79,13 +79,21 @@ def print_run_result_error(
         is_warning and result.status == NodeStatus.Warn
     ):
         if is_warning:
-            fire_event(RunResultWarning(resource_type=result.node.resource_type,
-                                        node_name=result.node.name,
-                                        path=result.node.original_file_path))
+            fire_event(
+                RunResultWarning(
+                    resource_type=result.node.resource_type,
+                    node_name=result.node.name,
+                    path=result.node.original_file_path
+                )
+            )
         else:
-            fire_event(RunResultFailure(resource_type=result.node.resource_type,
-                                        node_name=result.node.name,
-                                        path=result.node.original_file_path))
+            fire_event(
+                RunResultFailure(
+                    resource_type=result.node.resource_type,
+                    node_name=result.node.name,
+                    path=result.node.original_file_path
+                )
+            )
 
         if result.message:
             fire_event(RunResultError(msg=result.message))
@@ -131,9 +139,13 @@ def print_run_end_messages(results, keyboard_interrupt: bool = False) -> None:
     with DbtStatusMessage(), InvocationProcessor():
         with TextOnly():
             fire_event(EmptyLine())
-        fire_event(EndOfRunSummary(num_errors=len(errors),
-                                   num_warnings=len(warnings),
-                                   keyboard_interrupt=keyboard_interrupt))
+        fire_event(
+            EndOfRunSummary(
+                num_errors=len(errors),
+                num_warnings=len(warnings),
+                keyboard_interrupt=keyboard_interrupt
+            )
+        )
 
         for error in errors:
             print_run_result_error(error, is_warning=False)

@@ -16,16 +16,17 @@ class ServeTask(ConfiguredTask):
         os.chdir(self.config.target_path)
 
         port = self.args.port
+        address = '0.0.0.0'
 
         shutil.copyfile(DOCS_INDEX_FILE_PATH, 'index.html')
 
-        fire_event(ServingDocsPort(port=port))
+        fire_event(ServingDocsPort(address=address, port=port))
         fire_event(ServingDocsAccessInfo(port=port))
         fire_event(ServingDocsExitInfo())
 
         # mypy doesn't think SimpleHTTPRequestHandler is ok here, but it is
         httpd = TCPServer(  # type: ignore
-            ('0.0.0.0', port),
+            (address, port),
             SimpleHTTPRequestHandler  # type: ignore
         )  # type: ignore
 

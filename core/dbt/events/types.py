@@ -4,7 +4,7 @@ from typing import Any, List, Optional, Dict
 from dbt import ui
 from dbt import utils
 from dbt.node_types import NodeType
-from dbt.logger import get_timestamp
+from dbt.events.functions import format_fancy_output_line
 
 
 # types to represent log levels
@@ -999,10 +999,11 @@ class FreshnessCheckComplete(InfoLevel, CliEventABC):
 
 @dataclass
 class ServingDocsPort(InfoLevel, CliEventABC):
-    port: str
+    address: str
+    port: int
 
     def cli_msg(self) -> str:
-        return f"Serving docs at 0.0.0.0:{self.port}"
+        return f"Serving docs at {self.address}:{self.port}"
 
 
 @dataclass
@@ -1134,38 +1135,6 @@ class EndOfRunSummary(InfoLevel, CliEventABC):
         else:
             message = ui.green('Completed successfully')
         return message
-
-
-def format_fancy_output_line(
-        msg: str, status: str, index: Optional[int],
-        total: Optional[int], execution_time: Optional[float] = None,
-        truncate: bool = False
-) -> str:
-    if index is None or total is None:
-        progress = ''
-    else:
-        progress = '{} of {} '.format(index, total)
-    # TODO: remove this formatting once we rip out all the old logger
-    prefix = "{timestamp} | {progress}{message}".format(
-        timestamp=get_timestamp(),
-        progress=progress,
-        message=msg)
-
-    truncate_width = ui.printer_width() - 3
-    justified = prefix.ljust(ui.printer_width(), ".")
-    if truncate and len(justified) > truncate_width:
-        justified = justified[:truncate_width] + '...'
-
-    if execution_time is None:
-        status_time = ""
-    else:
-        status_time = " in {execution_time:0.2f}s".format(
-            execution_time=execution_time)
-
-    output = "{justified} [{status}{status_time}]".format(
-        justified=justified, status=status, status_time=status_time)
-
-    return output
 
 
 @dataclass
@@ -1755,7 +1724,7 @@ if 1 == 0:
     BuildingCatalog()
     CompileComplete()
     FreshnessCheckComplete()
-    ServingDocsPort(port='')
+    ServingDocsPort(address='', port=0)
     ServingDocsAccessInfo(port='')
     ServingDocsExitInfo()
     SeedHeader(header='')

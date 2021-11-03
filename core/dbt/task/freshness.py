@@ -36,9 +36,13 @@ class FreshnessRunner(BaseRunner):
 
     def before_execute(self):
         description = 'freshness of {0.source_name}.{0.name}'.format(self.node)
-        fire_event(PrintStartLine(description=description,
-                                  index=self.node_index,
-                                  total=self.num_nodes))
+        fire_event(
+            PrintStartLine(
+                description=description,
+                index=self.node_index,
+                total=self.num_nodes
+            )
+        )
 
     def after_execute(self, result):
         if hasattr(result, 'node'):
@@ -48,29 +52,45 @@ class FreshnessRunner(BaseRunner):
             source_name = result.source_name
             table_name = result.table_name
         if result.status == FreshnessStatus.RuntimeErr:
-            fire_event(PrintHookEndErrorLine(source_name=source_name,
-                                             table_name=table_name,
-                                             index=self.node_index,
-                                             total=self.num_nodes,
-                                             execution_time=result.execution_time))
+            fire_event(
+                PrintHookEndErrorLine(
+                    source_name=source_name,
+                    table_name=table_name,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
         elif result.status == FreshnessStatus.Error:
-            fire_event(PrintHookEndErrorStaleLine(source_name=source_name,
-                                                  table_name=table_name,
-                                                  index=self.node_index,
-                                                  total=self.num_nodes,
-                                                  execution_time=result.execution_time))
+            fire_event(
+                PrintHookEndErrorStaleLine(
+                    source_name=source_name,
+                    table_name=table_name,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
         elif result.status == FreshnessStatus.Warn:
-            fire_event(PrintHookEndWarnLine(source_name=source_name,
-                                            table_name=table_name,
-                                            index=self.node_index,
-                                            total=self.num_nodes,
-                                            execution_time=result.execution_time))
+            fire_event(
+                PrintHookEndWarnLine(
+                    source_name=source_name,
+                    table_name=table_name,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
         else:
-            fire_event(PrintHookEndPassLine(source_name=source_name,
-                                            table_name=table_name,
-                                            index=self.node_index,
-                                            total=self.num_nodes,
-                                            execution_time=result.execution_time))
+            fire_event(
+                PrintHookEndPassLine(
+                    source_name=source_name,
+                    table_name=table_name,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
 
     def error_result(self, node, message, start_time, timing_info):
         return self._build_run_result(

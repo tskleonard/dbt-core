@@ -173,24 +173,36 @@ class ModelRunner(CompileRunner):
                                     self.get_node_representation())
 
     def print_start_line(self):
-        fire_event(PrintStartLine(description=self.describe_node(),
-                                  index=self.node_index,
-                                  total=self.num_nodes))
+        fire_event(
+            PrintStartLine(
+                description=self.describe_node(),
+                index=self.node_index,
+                total=self.num_nodes
+            )
+        )
 
     def print_result_line(self, result):
         description = self.describe_node()
         if result.status == NodeStatus.Error:
-            fire_event(PrintModelErrorResultLine(description=description,
-                                                 status=result.status,
-                                                 index=self.node_index,
-                                                 total=self.num_nodes,
-                                                 execution_time=result.execution_time))
+            fire_event(
+                PrintModelErrorResultLine(
+                    description=description,
+                    status=result.status,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
         else:
-            fire_event(PrintModelResultLine(description=description,
-                                            status=result.message,
-                                            index=self.node_index,
-                                            total=self.num_nodes,
-                                            execution_time=result.execution_time))
+            fire_event(
+                PrintModelResultLine(
+                    description=description,
+                    status=result.message,
+                    index=self.node_index,
+                    total=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
 
     def before_execute(self):
         self.print_start_line()
@@ -335,10 +347,14 @@ class RunTask(CompileTask):
             hook_meta_ctx = HookMetadata(hook, self.index_offset(idx))
             with UniqueID(hook.unique_id):
                 with hook_meta_ctx, startctx:
-                    fire_event(PrintHookStartLine(statement=hook_text,
-                                                  index=idx,
-                                                  total=num_hooks,
-                                                  truncate=True))
+                    fire_event(
+                        PrintHookStartLine(
+                            statement=hook_text,
+                            index=idx,
+                            total=num_hooks,
+                            truncate=True
+                        )
+                    )
 
                 status = 'OK'
 
@@ -349,12 +365,16 @@ class RunTask(CompileTask):
                 self.ran_hooks.append(hook)
 
                 with finishctx, DbtModelState({'node_status': 'passed'}):
-                    fire_event(PrintHookEndLine(statement=hook_text,
-                                                status=str(status),
-                                                index=idx,
-                                                total=num_hooks,
-                                                execution_time=timer.elapsed,
-                                                truncate=True))
+                    fire_event(
+                        PrintHookEndLine(
+                            statement=hook_text,
+                            status=str(status),
+                            index=idx,
+                            total=num_hooks,
+                            execution_time=timer.elapsed,
+                            truncate=True
+                        )
+                    )
 
         self._total_executed += len(ordered_hooks)
 

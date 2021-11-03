@@ -68,34 +68,54 @@ class TestRunner(CompileRunner):
         model = result.node
 
         if result.status == TestStatus.Error:
-            fire_event(PrintErrorTestResult(name=model.name,
-                                            index=self.node_index,
-                                            num_models=self.num_nodes,
-                                            execution_time=result.execution_time))
+            fire_event(
+                PrintErrorTestResult(
+                    name=model.name,
+                    index=self.node_index,
+                    num_models=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
         elif result.status == TestStatus.Pass:
-            fire_event(PrintPassTestResult(name=model.name,
-                                           index=self.node_index,
-                                           num_models=self.num_nodes,
-                                           execution_time=result.execution_time))
+            fire_event(
+                PrintPassTestResult(
+                    name=model.name,
+                    index=self.node_index,
+                    num_models=self.num_nodes,
+                    execution_time=result.execution_time
+                )
+            )
         elif result.status == TestStatus.Warn:
-            fire_event(PrintWarnTestResult(name=model.name,
-                                           index=self.node_index,
-                                           num_models=self.num_nodes,
-                                           execution_time=result.execution_time,
-                                           failures=result.failures))
+            fire_event(
+                PrintWarnTestResult(
+                    name=model.name,
+                    index=self.node_index,
+                    num_models=self.num_nodes,
+                    execution_time=result.execution_time,
+                    failures=result.failures
+                )
+            )
         elif result.status == TestStatus.Fail:
-            fire_event(PrintFailureTestResult(name=model.name,
-                                              index=self.node_index,
-                                              num_models=self.num_nodes,
-                                              execution_time=result.execution_time,
-                                              failures=result.failures))
+            fire_event(
+                PrintFailureTestResult(
+                    name=model.name,
+                    index=self.node_index,
+                    num_models=self.num_nodes,
+                    execution_time=result.execution_time,
+                    failures=result.failures
+                )
+            )
         else:
             raise RuntimeError("unexpected status: {}".format(result.status))
 
     def print_start_line(self):
-        fire_event(PrintStartLine(description=self.describe_node(),
-                                  index=self.node_index,
-                                  total=self.num_nodes))
+        fire_event(
+            PrintStartLine(
+                description=self.describe_node(),
+                index=self.node_index,
+                total=self.num_nodes
+            )
+        )
 
     def before_execute(self):
         self.print_start_line()
