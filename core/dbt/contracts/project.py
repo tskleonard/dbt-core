@@ -73,6 +73,11 @@ class LocalPackage(Package):
     local: str
 
 
+@dataclass
+class TarballPackage(Package):
+    tarball: str
+
+
 # `float` also allows `int`, according to PEP484 (and jsonschema!)
 RawVersion = Union[str, float]
 
@@ -104,7 +109,7 @@ class RegistryPackage(Package):
             return [str(self.version)]
 
 
-PackageSpec = Union[LocalPackage, GitPackage, RegistryPackage]
+PackageSpec = Union[LocalPackage, TarballPackage, GitPackage, RegistryPackage]
 
 
 @dataclass
