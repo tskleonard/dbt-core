@@ -18,7 +18,7 @@ from dbt.contracts.project import (
     RegistryPackage,
 )
 
-PackageContract = Union[LocalPackage, TarballPackage, 
+PackageContract = Union[LocalPackage, TarballPackage,
                         GitPackage, RegistryPackage]
 
 
