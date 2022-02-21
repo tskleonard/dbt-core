@@ -758,6 +758,22 @@ def package_version_not_found(package_name, version_range, available_versions):
     raise_dependency_error(base_msg.format(package_name, version_range, available_versions))
 
 
+def package_structure_malformed():
+    msg = (
+        "Package structure malformed. Expected one parent folder"
+        " in tar root, or if multiple dirs in root, set "
+        " subdirectory setting to specify the path to"
+        " package dir. Try rebuilding the package structure."
+        " or specifying subdirectory setting ")
+    raise_dependency_error(msg)
+
+
+def package_sha1_fail(actual, expected):
+    msg = ("sha1 mismatch for file. "
+           f"Actual: [{actual}], expected: [{expected}]")
+    raise_dependency_error(msg)
+
+
 def invalid_materialization_argument(name, argument):
     raise_compiler_error(
         "materialization '{}' received unknown argument '{}'.".format(name, argument)
