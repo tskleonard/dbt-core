@@ -2384,6 +2384,30 @@ class EventBufferFull(WarnLevel):
         return "Internal event buffer full. Earliest events will be dropped (FIFO)."
 
 
+@dataclass
+class Sha1ChecksumPasses(DebugLevel):
+    code: str = "Z049"
+
+    def message(self) -> str:
+        return f'sha1 checksum passes ({self.sha1})'
+
+
+@dataclass
+class UntarProjectRoot(DebugLevel):
+    subdirectory: str
+    tar_dir_name: str
+    code: str = "Z050"
+
+    def message(self) -> str:
+        if self.subdirectory:
+            txt_condition = 'specified'
+        else:
+            txt_condition = 'resolved'
+
+        return (f"Using {txt_condition} {self.tar_dir_name}/ directory as "
+                "project root in tarfile.")
+
+
 # since mypy doesn't run on every file we need to suggest to mypy that every
 # class gets instantiated. But we don't actually want to run this code.
 # making the conditional `if False` causes mypy to skip it as dead code so
