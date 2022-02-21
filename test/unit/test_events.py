@@ -409,7 +409,7 @@ sample_values = [
     PartialParsingProjectEnvVarsChanged(),
     RegistryProgressGETResponse(url='', resp_code=1),
     Sha1ChecksumPasses(),
-    UntarProjectRoot(subdirectory='', tar_dir_name='', ),
+    UntarProjectRoot(subdirectory='', tar_dir_name=''),
     IntegrationTestDebug(msg=''),
     IntegrationTestInfo(msg=''),
     IntegrationTestWarn(msg=''),
