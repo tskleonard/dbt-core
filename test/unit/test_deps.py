@@ -144,30 +144,9 @@ class TestTarballPackage(unittest.TestCase):
 
     def test_file_obj_sha1(self):
         from dbt.deps.base import get_downloads_path
-        import io
         import tarfile
         from tempfile import NamedTemporaryFile
         
-        # Test off in memory file object.
-        #  In memory sha1, seems stable.
-        with io.BytesIO() as f:
-            tar = tarfile.open(fileobj=f, mode='w:gz')
-            for d in self.good_tar_def:
-                t = tarfile.TarInfo(d['name'])
-                if d.get('type'):
-                    t.type = d.get('type')
-                if d.get('size'):
-                    t.size = d.get('size')
-                tar.addfile(t)
-
-            a_contract = (
-                TarballPackage.from_dict({'tarball': tar}))
-            a = TarballUnpinnedPackage.from_contract(a_contract)
-            a_pinned = a.resolved()
-            mock_hash = a_pinned.file_sha1(f)
-            # in memory sha1, seems stable
-            self.assertEqual(mock_hash, 'da39a3ee5e6b4b0d3255bfef95601890afd80709')
-            
         # Test off disk write.
         with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
             tar = tarfile.open(named_temp_file.name, mode='w:gz')
