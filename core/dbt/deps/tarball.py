@@ -1,5 +1,5 @@
 import os
-# import shutil
+import functools
 import hashlib
 import tarfile
 from tempfile import NamedTemporaryFile
@@ -18,6 +18,8 @@ from dbt.contracts.project import (
     ProjectPackageMetadata,
     TarballPackage,
 )
+from dbt.utils import _connection_exception_retry as connection_exception_retry
+
 
 
 TARFILE_MAX_SIZE = 1 * 1e+6  # limit tarfiles to 1mb
@@ -48,28 +50,10 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         self.subdirectory = subdirectory
         # self.tarfile_bin = self.get_tarfile()
         self.get_tarfile()
-        ''' init tarfile in class, and use tarfile as cache.
-            This simplifies tempfile handling, and prevents multiple hits to
-              url, since we need the file for two seperate operations. One
-              for metadata fetch (in style of other packages) and once for
-              for install for install. '''
         self.tar_dir_name = self.resolve_tar_dir()
         fire_event(UntarProjectRoot(
             subdirectory=self.subdirectory,
             tar_dir_name=self.tar_dir_name))
-
-    def __enter__(
-        self,
-        tarball: str,
-        sha1: Optional[str] = None,
-        subdirectory: Optional[str] = None,
-    ) -> None:
-        super().__init__(tarball)
-        self.sha1 = sha1
-        self.subdirectory = subdirectory
-        self.tarfile_bin = None
-        self.tar_dir_name = None
-        fire_event(UntarProjectRoot(self))
 
     def get_version(self):
         return None
@@ -101,31 +85,43 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
                 msg = f"{filepath} is not a valid tarfile."
                 raise DependencyException(msg)
 
+        def handle_local_tar(self):
+            # pass through local tarfile path primarily for testing
+            validate_checksum(self, self.tarball)
+            validate_tarfile(self, self.tarball)
+            tar = tarfile.open(self.tarball, "r:gz")
+            self.tarfile_bin = tar
+
+        def handle_remote_tar(self):
+            with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
+                download_url = self.tarball
+
+                download_untar_fn = functools.partial(
+                    self.download_tar
+                    , download_url
+                    , named_temp_file.name
+                )
+                connection_exception_retry(download_untar_fn, 5)
+
+                validate_checksum(self, named_temp_file.name)
+                validate_tarfile(self, named_temp_file.name)
+                tar = tarfile.open(named_temp_file.name, "r:gz")
+                self.tarfile_bin = tar
+
         if type(self.tarball) is str:
             if os.path.isfile(self.tarball):
-                # pass through local tarfile path primarily for testing
-                validate_checksum(self, self.tarball)
-                validate_tarfile(self, self.tarball)
-                tar = tarfile.open(self.tarball, "r:gz")
-
+                print('handle_local_tar')
+                handle_local_tar(self)
             else:
                 # assume download if str and not local file
-                with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
-                    download_url = self.tarball
-                    system.download_with_retries(
-                        download_url, named_temp_file.name)
-                    validate_checksum(self, named_temp_file.name)
-                    validate_tarfile(self, self.tarball)
-                    tar = tarfile.open(named_temp_file.name, "r:gz")
-
+                print('handle_remote_tar')
+                handle_remote_tar(self)
         elif type(self.tarball) is tarfile.TarFile:
             # pass through TarFile object primarily for testing
             # no explicit hash test here
-            tar = self.tarball
+            self.tarfile_bin = self.tarball
         else:
             raise ValueError('unknown tarball type defined')
-
-        self.tarfile_bin = tar
 
         if not self.get_tar_size() <= TARFILE_MAX_SIZE:
             msg = ("Tarfile size is larger than limit "
@@ -133,6 +129,17 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
             raise DependencyException(msg)
 
             fire_event(Sha1ChecksumPasses())
+
+    def download_tar(self, download_url, tar_path):
+        """
+        Sometimes the download of the files fails and we want to retry.  Sometimes the
+        download appears successful but the file did not make it through as expected
+        (generally due to a github incident).  Either way we want to retry downloading
+        and untarring to see if we can get a success.  Call this within
+        `_connection_exception_retry`
+        """
+
+        system.download(download_url, tar_path)
 
     def resolve_tar_dir(self):
         ''' Assumed structure:
