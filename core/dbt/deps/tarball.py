@@ -21,7 +21,6 @@ from dbt.contracts.project import (
 from dbt.utils import _connection_exception_retry as connection_exception_retry
 
 
-
 TARFILE_MAX_SIZE = 1 * 1e+6  # limit tarfiles to 1mb
 
 
@@ -49,11 +48,8 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         self.sha1 = sha1
         self.subdirectory = subdirectory
         # self.tarfile_bin = self.get_tarfile()
-        self.get_tarfile()
-        self.tar_dir_name = self.resolve_tar_dir()
-        fire_event(UntarProjectRoot(
-            subdirectory=self.subdirectory,
-            tar_dir_name=self.tar_dir_name))
+        # self.get_tarfile()
+        # self.tar_dir_name = self.resolve_tar_dir()
 
     def get_version(self):
         return None
@@ -173,8 +169,14 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         return tar_dir_name
 
     def _fetch_metadata(self, project, renderer):
+        self.get_tarfile()
+
         tarfile_bin = self.tarfile_bin
-        tar_dir_name = self.tar_dir_name
+        tar_dir_name = self.resolve_tar_dir()
+
+        fire_event(UntarProjectRoot(
+            subdirectory=self.subdirectory,
+            tar_dir_name=tar_dir_name))
 
         tar_path = os.path.realpath(
             os.path.join(get_downloads_path(), tar_dir_name)
@@ -190,7 +192,9 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         return ProjectPackageMetadata.from_project(loaded)
 
     def install(self, project, renderer):
-        tar_dir_name = self.tar_dir_name
+        self.get_tarfile()
+
+        tar_dir_name = self.resolve_tar_dir()
 
         tar_path = os.path.realpath(
             os.path.join(get_downloads_path(), tar_dir_name)
