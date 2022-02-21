@@ -309,6 +309,28 @@ class RegistryProgressGETResponse(DebugLevel):
     def message(self) -> str:
         return f"Response from registry: GET {self.url} {self.resp_code}"
 
+@dataclass
+class Sha1ChecksumPasses(DebugLevel):
+    code: str = "M049"
+
+    def message(self) -> str:
+        return f'sha1 checksum passes ({self.sha1})'
+
+
+@dataclass
+class UntarProjectRoot(DebugLevel):
+    subdirectory: str
+    tar_dir_name: str
+    code: str = "M050"
+
+    def message(self) -> str:
+        if self.subdirectory:
+            txt_condition = 'specified'
+        else:
+            txt_condition = 'resolved'
+
+        return (f"Using {txt_condition} {self.tar_dir_name}/ directory as "
+                "project root in tarfile.")
 
 # TODO this was actually `logger.exception(...)` not `logger.error(...)`
 @dataclass
@@ -2382,30 +2404,6 @@ class EventBufferFull(WarnLevel):
 
     def message(self) -> str:
         return "Internal event buffer full. Earliest events will be dropped (FIFO)."
-
-
-@dataclass
-class Sha1ChecksumPasses(DebugLevel):
-    code: str = "Z049"
-
-    def message(self) -> str:
-        return f'sha1 checksum passes ({self.sha1})'
-
-
-@dataclass
-class UntarProjectRoot(DebugLevel):
-    subdirectory: str
-    tar_dir_name: str
-    code: str = "Z050"
-
-    def message(self) -> str:
-        if self.subdirectory:
-            txt_condition = 'specified'
-        else:
-            txt_condition = 'resolved'
-
-        return (f"Using {txt_condition} {self.tar_dir_name}/ directory as "
-                "project root in tarfile.")
 
 
 # since mypy doesn't run on every file we need to suggest to mypy that every
