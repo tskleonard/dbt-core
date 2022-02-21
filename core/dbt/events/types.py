@@ -309,6 +309,7 @@ class RegistryProgressGETResponse(DebugLevel):
     def message(self) -> str:
         return f"Response from registry: GET {self.url} {self.resp_code}"
 
+
 @dataclass
 class Sha1ChecksumPasses(DebugLevel):
     code: str = "M049"
