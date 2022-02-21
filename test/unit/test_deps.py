@@ -5,7 +5,7 @@ import dbt.deps
 import dbt.exceptions
 from dbt.deps.git import GitUnpinnedPackage
 from dbt.deps.local import LocalUnpinnedPackage
-from dbt.deps.tarball import TarballUnpinnedPackage
+from dbt.deps.tarball import TarballUnpinnedPackage, TARFILE_MAX_SIZE
 from dbt.deps.registry import RegistryUnpinnedPackage
 from dbt.deps.resolver import resolve_packages
 from dbt.contracts.project import (
@@ -33,37 +33,168 @@ class TestLocalPackage(unittest.TestCase):
 
 
 class TestTarballPackage(unittest.TestCase):
+    import tarfile
+
+    def mock_tarball(self, def_in):
+        import tarfile
+        # helper to make tarfile in memory for subseqent testing
+        import io
+
+        with io.BytesIO() as f:
+            tar = tarfile.open(fileobj=f, mode="x")
+            for d in def_in:
+                t = tarfile.TarInfo(d["name"])
+                if d.get("type"):
+                    t.type = d.get("type")
+                if d.get("size"):
+                    t.size = d.get("size")
+                tar.addfile(t)
+        return tar
+
+    bad_tar_def = [{"size": 1000, "name": "my_file.py"}]
+    bad_tar_def_sz = [
+        {"type": tarfile.DIRTYPE, "name": "dir_1"},
+        {"size": TARFILE_MAX_SIZE + 1, "name": "dir_1/my_file.py"},
+    ]
+    good_tar_def = [
+        {"type": tarfile.DIRTYPE, "name": "dir_1"},
+        {"size": 1000, "name": "dir_1/my_file.py"},
+    ]
+    many_dir_dar_def = [
+        {"type": tarfile.DIRTYPE, "name": "dir_1"},
+        {"type": tarfile.DIRTYPE, "name": "dir_2"},
+        {"size": 1000, "name": "dir_1/my_file.py"},
+    ]
+
     def test_init(self):
-        a_contract = TarballPackage.from_dict({'tarball': '/path/to/package'})
-        self.assertEqual(a_contract.tarball, '/path/to/package')
-        a = TarballUnpinnedPackage.from_contract(a_contract)
-        self.assertEqual(a.tarball, '/path/to/package')
-        a_pinned = a.resolved()
-        self.assertEqual(a_pinned.tarball, '/path/to/package')
-        self.assertEqual(str(a_pinned), '/path/to/package')
-
-        # test optional args
         a_contract = TarballPackage.from_dict(
-            {'tarball': '/path/to/package', 'sha1': '123'
-             , 'subdirectory': 'subdir'}
+            {"tarball": "http://example.com"})
+        self.assertEqual(a_contract.tarball, "http://example.com")
+        a = TarballUnpinnedPackage.from_contract(a_contract)
+        self.assertEqual(a.tarball, "http://example.com")
+
+    def test_init_tarfiles(self):
+        mock_good_tar = self.mock_tarball(self.good_tar_def)
+        mock_bad_tar = self.mock_tarball(self.bad_tar_def)
+
+        a_contract = TarballPackage.from_dict({"tarball": mock_good_tar})
+        a = TarballUnpinnedPackage.from_contract(a_contract)
+        a_pinned = a.resolved()
+        self.assertEqual(a_pinned.tarfile_bin, mock_good_tar)
+
+        a_contract = TarballPackage.from_dict({"tarball": mock_bad_tar})
+        a = TarballUnpinnedPackage.from_contract(a_contract)
+        with self.assertRaises(dbt.exceptions.DependencyException):
+            a_pinned = a.resolved()
+
+    def test_tarfile_args(self):
+        mock_bad_tar = self.mock_tarball(self.bad_tar_def)
+        mock_bad_tar_sz = self.mock_tarball(self.bad_tar_def_sz)
+        mock_many_dir_tar = self.mock_tarball(self.many_dir_dar_def)
+        mock_good_tar = self.mock_tarball(self.good_tar_def)
+
+        a_contract = TarballPackage.from_dict(
+            {"tarball": "http://example.com",
+             "sha1": "123", "subdirectory": "subdir"}
         )
-        self.assertEqual(a_contract.tarball, '/path/to/package')
-        self.assertEqual(a_contract.sha1, '123')
-        self.assertEqual(a_contract.subdirectory, 'subdir')
+        self.assertEqual(a_contract.tarball, "http://example.com")
+        self.assertEqual(a_contract.sha1, "123")
+        self.assertEqual(a_contract.subdirectory, "subdir")
 
         a = TarballUnpinnedPackage.from_contract(a_contract)
-        self.assertEqual(a.tarball, '/path/to/package')
-        self.assertEqual(a.sha1, '123')
-        self.assertEqual(a.subdirectory, 'subdir')
+        self.assertEqual(a.tarball, "http://example.com")
+        self.assertEqual(a.sha1, "123")
+        self.assertEqual(a.subdirectory, "subdir")
+
+        a_contract = TarballPackage.from_dict(
+            {"tarball": mock_good_tar, "sha1": "123", "subdirectory": "dir_1"}
+        )
+        a = TarballUnpinnedPackage.from_contract(a_contract)
         a_pinned = a.resolved()
-        self.assertEqual(a_pinned.tarball, '/path/to/package')
-        self.assertEqual(a_pinned.sha1, '123')
-        self.assertEqual(a_pinned.subdirectory, 'subdir')
-        self.assertEqual(a_pinned.resolve_tar_dir(), 'subdir')
-        self.assertEqual(str(a_pinned), '/path/to/package')
+        self.assertEqual(a_pinned.tarfile_bin, mock_good_tar)
+        self.assertEqual(a_pinned.sha1, "123")
+        self.assertEqual(a_pinned.subdirectory, "dir_1")
+        self.assertEqual(a_pinned.resolve_tar_dir(), "dir_1")
 
-        # mock a tarinfo list?
+        a_contract = TarballPackage.from_dict(
+            {"tarball": mock_good_tar, "sha1": "123"})
+        a = TarballUnpinnedPackage.from_contract(a_contract)
+        a_pinned = a.resolved()
+        self.assertEqual(a_pinned.tarfile_bin, mock_good_tar)
+        self.assertEqual(a_pinned.sha1, "123")
+        self.assertEqual(a_pinned.subdirectory, None)
+        self.assertEqual(a_pinned.resolve_tar_dir(), "dir_1")
 
+        a_contract = TarballPackage.from_dict(
+            {"tarball": mock_many_dir_tar, "subdirectory": "subdir"}
+        )
+        a = TarballUnpinnedPackage.from_contract(a_contract)
+        with self.assertRaises(dbt.exceptions.DependencyException):
+            a.resolved()
+
+        a_contract = TarballPackage.from_dict({"tarball": mock_many_dir_tar})
+        a = TarballUnpinnedPackage.from_contract(a_contract)
+        with self.assertRaises(dbt.exceptions.DependencyException):
+            a.resolved()
+
+        a_contract = TarballPackage.from_dict({"tarball": mock_bad_tar_sz})
+        a = TarballUnpinnedPackage.from_contract(a_contract)
+        with self.assertRaises(dbt.exceptions.DependencyException):
+            a.resolved()
+
+    def test_file_obj_sha1(self):
+        from dbt.deps.base import get_downloads_path
+        import io
+        import tarfile
+        from tempfile import NamedTemporaryFile
+        
+        # Test off in memory file object.
+        #  In memory sha1, seems stable.
+        with io.BytesIO() as f:
+            tar = tarfile.open(fileobj=f, mode='w:gz')
+            for d in self.good_tar_def:
+                t = tarfile.TarInfo(d['name'])
+                if d.get('type'):
+                    t.type = d.get('type')
+                if d.get('size'):
+                    t.size = d.get('size')
+                tar.addfile(t)
+
+            a_contract = (
+                TarballPackage.from_dict({'tarball': tar}))
+            a = TarballUnpinnedPackage.from_contract(a_contract)
+            a_pinned = a.resolved()
+            mock_hash = a_pinned.file_sha1(f)
+            # in memory sha1, seems stable
+            self.assertEqual(mock_hash, 'da39a3ee5e6b4b0d3255bfef95601890afd80709')
+            
+        # Test off disk write.
+        with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
+            tar = tarfile.open(named_temp_file.name, mode='w:gz')
+            for d in self.good_tar_def:
+                t = tarfile.TarInfo(d['name'])
+                if d.get('type'):
+                    t.type = d.get('type')
+                if d.get('size'):
+                    t.size = d.get('size')
+                tar.addfile(t)
+            tar.close()
+            
+            a_contract = (
+                TarballPackage.from_dict({'tarball': named_temp_file.name}))
+            a = TarballUnpinnedPackage.from_contract(a_contract)
+            a_pinned = a.resolved()
+            # Temp file sha1 varies due to path. Extra steps to calculate 
+            #  sha1, and pass to second contract, to compare.
+            this_hash = a_pinned.file_sha1(named_temp_file.name)
+            b_contract = (
+                TarballPackage.from_dict(
+                    {'tarball': named_temp_file.name,
+                     'sha1' : this_hash}
+                ))
+            b = TarballUnpinnedPackage.from_contract(b_contract)
+            self.assertEqual(this_hash, b.sha1)
+            
 
 class TestGitPackage(unittest.TestCase):
     def test_init(self):
