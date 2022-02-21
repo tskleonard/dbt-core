@@ -408,6 +408,8 @@ sample_values = [
     DropRelation(dropped=_ReferenceKey(database="", schema="", identifier="")),
     PartialParsingProjectEnvVarsChanged(),
     RegistryProgressGETResponse(url='', resp_code=1),
+    Sha1ChecksumPasses(),
+    UntarProjectRoot(subdirectory='', tar_dir_name='', ),
     IntegrationTestDebug(msg=''),
     IntegrationTestInfo(msg=''),
     IntegrationTestWarn(msg=''),
