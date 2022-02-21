@@ -3,17 +3,22 @@ import os
 import hashlib
 import tarfile
 from tempfile import NamedTemporaryFile
-from typing import Optional
-
+from typing import Optional, Union
 from dbt.clients import system
 from dbt.deps.base import PinnedPackage, UnpinnedPackage, get_downloads_path
+from dbt.exceptions import (
+    DependencyException, 
+    package_structure_malformed, 
+    package_sha1_fail
+)
+from dbt.events.functions import fire_event
+from dbt.events.types import Sha1ChecksumPasses, UntarProjectRoot
 from dbt.config import Project
 from dbt.contracts.project import (
     ProjectPackageMetadata,
     TarballPackage,
 )
 
-from dbt.logger import GLOBAL_LOGGER as logger
 
 TARFILE_MAX_SIZE = 1 * 1e+6  # limit tarfiles to 1mb
 
@@ -34,6 +39,27 @@ class TarballPackageMixin:
 class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
     def __init__(
         self,
+        tarball: Union[str, tarfile.TarFile],
+        sha1: Optional[str] = None,
+        subdirectory: Optional[str] = None,
+    ) -> None:
+        super().__init__(tarball)
+        self.sha1 = sha1
+        self.subdirectory = subdirectory
+        # self.tarfile_bin = self.get_tarfile()
+        self.get_tarfile()
+        ''' init tarfile in class, and use tarfile as cache.
+            This simplifies tempfile handling, and prevents multiple hits to
+              url, since we need the file for two seperate operations. One
+              for metadata fetch (in style of other packages) and once for
+              for install for install. '''
+        self.tar_dir_name = self.resolve_tar_dir()
+        fire_event(UntarProjectRoot(
+            subdirectory=self.subdirectory,
+            tar_dir_name=self.tar_dir_name))
+
+    def __enter__(
+        self,
         tarball: str,
         sha1: Optional[str] = None,
         subdirectory: Optional[str] = None,
@@ -41,14 +67,9 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         super().__init__(tarball)
         self.sha1 = sha1
         self.subdirectory = subdirectory
-        self.tarfile = self.get_tarfile()
-        # init tarfile in class, and use tarfile as cache
-        # simpler for tempfile handling, and prevent multiple hits to
-        # url (one for metadata, one for intall)
-        self.tar_dir_name = self.resolve_tar_dir()
-        # assumed structure is that tarfile has a root dir (package name)
-        # but we don't know what it is. will scan file for best candidate
-        # todo implement subdirectory like in git package
+        self.tarfile_bin = None
+        self.tar_dir_name = None
+        fire_event(UntarProjectRoot(self))
 
     def get_version(self):
         return None
@@ -56,64 +77,96 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
     def nice_version_name(self):
         return '<tarball @ {}>'.format(self.tarball)
 
-    def get_tarfile(self):
-        def get_tar_size(TarFile: tarfile.TarFile):
-            return sum(x.size for x in TarFile.getmembers())
+    def get_tar_size(self):
+        return sum(x.size for x in self.tarfile_bin.getmembers())
 
-        def file_sha1(fp: str):
-            with open(named_temp_file.name, 'rb') as fp:
+    def file_sha1(self, fp_in: str):
+        if type(fp_in) is str:
+            with open(fp_in, 'rb') as fp:
                 return hashlib.sha1(fp.read()).hexdigest()
+        elif hasattr(fp_in, 'read'):
+            return hashlib.sha1(fp_in.read()).hexdigest()
+        else:
+            raise ValueError()
 
-        with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
-            # NamedTemporaryFile on top of get_downloads_path
-            # can mean NamedTemporaryFile in TemporaryFile, but works fine
-            logger.debug(f"Using NamedTemporaryFile {named_temp_file.name}")
-            download_url = self.tarball
-            system.download_with_retries(download_url, named_temp_file.name)
-
-            msg = f"{download_url} is not a valid tarfile."
-            assert tarfile.is_tarfile(named_temp_file.name), msg
-
-            tar = tarfile.open(named_temp_file.name, "r:gz")
-
-            msg = (f"{named_temp_file.name} size is larger than limit "
-                   "of {TARFILE_MAX_SIZE}.")
-            assert get_tar_size(tar) <= TARFILE_MAX_SIZE, msg
-
+    def get_tarfile(self):
+        def validate_checksum(self, filepath):
             if self.sha1:
-                checksum = file_sha1(named_temp_file.name)
-                msg = ("sha1 mismatch for downloaded file. "
-                       f"Actual: [{checksum}], expected: [{self.sha1}]. ")
-                assert checksum == self.sha1, msg
-                logger.debug(f"sha1 checksum passes ({self.sha1})")
+                checksum = self.file_sha1(filepath)
+                if not checksum == self.sha1:
+                    package_sha1_fail(checksum, self.sha1)
 
-        return tar
+        def validate_tarfile(self, filepath):
+            if not tarfile.is_tarfile(filepath):
+                msg = f"{filepath} is not a valid tarfile."
+                raise DependencyException(msg)
+
+        if type(self.tarball) is str:
+            if os.path.isfile(self.tarball):
+                # pass through local tarfile path primarily for testing
+                validate_checksum(self, self.tarball)
+                validate_tarfile(self, self.tarball)
+                tar = tarfile.open(self.tarball, "r:gz")
+
+            else:
+                # assume download if str and not local file
+                with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
+                    download_url = self.tarball
+                    system.download_with_retries(
+                        download_url, named_temp_file.name)
+                    validate_checksum(self, named_temp_file.name)
+                    validate_tarfile(self, self.tarball)
+                    tar = tarfile.open(named_temp_file.name, "r:gz")
+
+        elif type(self.tarball) is tarfile.TarFile:
+            # pass through TarFile object primarily for testing
+            # no explicit hash test here
+            tar = self.tarball
+        else:
+            raise ValueError('unknown tarball type defined')
+
+        self.tarfile_bin = tar
+
+        if not self.get_tar_size() <= TARFILE_MAX_SIZE:
+            msg = ("Tarfile size is larger than limit "
+                   f"of {TARFILE_MAX_SIZE}.")
+            raise DependencyException(msg)
+
+            fire_event(Sha1ChecksumPasses())
 
     def resolve_tar_dir(self):
-        ''' assumed structure is that tarfile has a root dir (package name)
-        but we don't know what it is. will look for lone dir on root and
-        use that.
-        optional - use subdirectory arg to manually specify, like used in git
-        package'''
-        if not self.subdirectory:
-            tar_dir_name = system.resolve_tar_dir_name(self.tarfile)
-            debug_txt = 'resolved '
-            msg = ("Package structure malformed. Expected one parent folder in"
-                   " tar root. Try using the subdirectory setting to specify"
-                   " path to package dir, or rebuilding the package "
-                   "structure.")
-            assert tar_dir_name != '', msg
-        else:
-            tar_dir_name = self.subdirectory
-            debug_txt = 'specified '
+        ''' Assumed structure:
+              Tarfile has one folder in the a root dir 'project folder'.
+              This 'project folder' contains the package to install.
+              The 'project folder' name is the name of the package.  
+              This mirrors the format established for packages on dbt hub.
+            Or user can specify subdirectory arg in packages.yaml to manually
+              specify folder in tar root to use for install.
+              Tarfile has one folder in the a root dir matching subdirectory 
+              name.
+            '''
+        members = self.tarfile_bin.getmembers()
+        tarfile_dir_list = [x.name for x in members if x.isdir()]
+        if len(tarfile_dir_list) < 1:
+            package_structure_malformed()
 
-        logger.debug(f"Using {debug_txt} {tar_dir_name}/ directory as "
-                     "project root in tarfile.")
+        if not self.subdirectory:
+            tar_dir_name = system.resolve_tar_dir_name(self.tarfile_bin)
+            if tar_dir_name == '':
+                package_structure_malformed()
+
+        else:
+            if self.subdirectory not in tarfile_dir_list:
+                msg = (f"{self.subdirectory} is not a valid dir in tarfile.")
+                raise DependencyException(msg)
+
+            tar_dir_name = self.subdirectory
+            # check that this actually exists in tarfile?
 
         return tar_dir_name
 
     def _fetch_metadata(self, project, renderer):
-        tarfile = self.tarfile
+        tarfile_bin = self.tarfile_bin
         tar_dir_name = self.tar_dir_name
 
         tar_path = os.path.realpath(
@@ -121,7 +174,7 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         )
         system.make_directory(os.path.dirname(tar_path))
 
-        tarfile.extractall(path=tar_path)
+        tarfile_bin.extractall(path=tar_path)
 
         tar_extracted_root = os.path.join(tar_path, tar_dir_name)
 
@@ -142,9 +195,9 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
 
         deps_path = project.packages_install_path
         package_name = self.get_project_name(project, renderer)
-        # tarfile.extractall(path=deps_path)
+        # tarfile_bin.extractall(path=deps_path)
 
-        system.untar_tarfile(TarFile=self.tarfile, dest_dir=deps_path,
+        system.untar_tarfile(TarFile=self.tarfile_bin, dest_dir=deps_path,
                              rename_to=package_name)
 
 
