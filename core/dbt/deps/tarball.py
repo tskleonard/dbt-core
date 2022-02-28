@@ -1,18 +1,24 @@
 import os
+
 import functools
-import hashlib
 import tarfile
-from tempfile import NamedTemporaryFile
-from typing import Optional, Union
+
+# from tempfile import NamedTemporaryFile
+from typing import Optional  # , Union, BinaryIO
 from dbt.clients import system
 from dbt.deps.base import PinnedPackage, UnpinnedPackage, get_downloads_path
 from dbt.exceptions import (
-    DependencyException, 
-    package_structure_malformed, 
-    package_sha1_fail
+    DependencyException,
+    package_structure_malformed,
+    package_sha1_fail,
 )
 from dbt.events.functions import fire_event
-from dbt.events.types import Sha1ChecksumPasses, UntarProjectRoot
+from dbt.events.types import (
+    Sha1ChecksumPasses,
+    UntarProjectRoot,
+    TarballReceivedFeedback,
+    CopyFeedback,
+)
 from dbt.config import Project
 from dbt.contracts.project import (
     ProjectPackageMetadata,
@@ -21,7 +27,7 @@ from dbt.contracts.project import (
 from dbt.utils import _connection_exception_retry as connection_exception_retry
 
 
-TARFILE_MAX_SIZE = 1 * 1e+6  # limit tarfiles to 1mb
+TARFILE_MAX_SIZE = 1 * 1e6  # limit tarfiles to 1mb
 
 
 class TarballPackageMixin:
@@ -34,7 +40,7 @@ class TarballPackageMixin:
         return self.tarball
 
     def source_type(self) -> str:
-        return 'tarball'
+        return "tarball"
 
 
 class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
@@ -55,7 +61,7 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         return None
 
     def nice_version_name(self):
-        return '<tarball @ {}>'.format(self.tarball)
+        return "<tarball @ {}>".format(self.tarball)
 
     def get_tar_size(self):
         return sum(x.size for x in self.tarfile_bin.getmembers())
@@ -226,24 +232,19 @@ class TarballUnpinnedPackage(
         self.subdirectory = subdirectory
 
     @classmethod
-    def from_contract(
-        cls, contract: TarballPackage
-    ) -> 'TarballUnpinnedPackage':
+    def from_contract(cls, contract: TarballPackage) -> "TarballUnpinnedPackage":
         return cls(
-            tarball=contract.tarball, sha1=contract.sha1,
-            subdirectory=contract.subdirectory
+            tarball=contract.tarball,
+            sha1=contract.sha1,
+            subdirectory=contract.subdirectory,
         )
 
-    def incorporate(
-        self, other: 'TarballUnpinnedPackage'
-    ) -> 'TarballUnpinnedPackage':
+    def incorporate(self, other: "TarballUnpinnedPackage") -> "TarballUnpinnedPackage":
         return TarballUnpinnedPackage(
-            tarball=self.tarball, sha1=self.sha1,
-            subdirectory=self.subdirectory
+            tarball=self.tarball, sha1=self.sha1, subdirectory=self.subdirectory
         )
 
     def resolved(self) -> TarballPinnedPackage:
         return TarballPinnedPackage(
-            tarball=self.tarball, sha1=self.sha1,
-            subdirectory=self.subdirectory
+            tarball=self.tarball, sha1=self.sha1, subdirectory=self.subdirectory
         )
