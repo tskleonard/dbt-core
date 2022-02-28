@@ -18,8 +18,7 @@ from dbt.contracts.project import (
     RegistryPackage,
 )
 
-PackageContract = Union[LocalPackage, TarballPackage,
-                        GitPackage, RegistryPackage]
+PackageContract = Union[LocalPackage, TarballPackage, GitPackage, RegistryPackage]
 
 
 @dataclass
@@ -79,7 +78,9 @@ class PackageListing:
             elif isinstance(contract, RegistryPackage):
                 pkg = RegistryUnpinnedPackage.from_contract(contract)
             else:
-                raise InternalException("Invalid package type {}".format(type(contract)))
+                raise InternalException(
+                    "Invalid package type {}".format(type(contract))
+                )
             self.incorporate(pkg)
 
     @classmethod
