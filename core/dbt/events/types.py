@@ -326,9 +326,9 @@ class UntarProjectRoot(DebugLevel):
 
     def message(self) -> str:
         if self.subdirectory:
-            txt_condition = 'specified'
+            txt_condition = "specified"
         else:
-            txt_condition = 'resolved'
+            txt_condition = "resolved"
 
         return (f"Using {txt_condition} {self.tar_dir_name}/ directory as "
                 "project root in tarfile.")
@@ -931,7 +931,9 @@ class PartialParsingFailedBecauseNewProjectDependency(InfoLevel):
     code: str = "I026"
 
     def message(self) -> str:
-        return "Unable to do partial parsing because a project dependency has been added"
+        return (
+            "Unable to do partial parsing because a project dependency has been added"
+        )
 
 
 @dataclass

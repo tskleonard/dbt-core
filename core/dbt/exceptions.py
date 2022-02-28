@@ -764,13 +764,16 @@ def package_structure_malformed():
         " in tar root, or if multiple dirs in root, set "
         " subdirectory setting to specify the path to"
         " package dir. Try rebuilding the package structure."
-        " or specifying subdirectory setting ")
+        " or specifying subdirectory setting "
+    )
     raise_dependency_error(msg)
 
 
-def package_sha1_fail(actual, expected):
-    msg = ("sha1 mismatch for file. "
-           f"Actual: [{actual}], expected: [{expected}]")
+def package_sha1_fail(filepath, actual, provided):
+    msg = (
+        f"sha1 mismatch for {filepath}. "
+        f"Provided: [{provided}], this file: [{actual}]"
+    )
     raise_dependency_error(msg)
 
 
