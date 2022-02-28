@@ -79,13 +79,39 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
                 msg = f"{filepath} is not a valid tarfile."
                 raise DependencyException(msg)
 
-        def handle_local_tar(self):
-            # basic tarfile path passthrough primarily for testing
-            validate_checksum(self, self.tarball)
-            validate_tarfile(self, self.tarball)
-            self.tarfile_path = self.tarball
+        # def handle_local_tar(self):
+        #     # basic tarfile path passthrough primarily for testing
+        #     # validate_checksum(self, self.tarball)
+        #     # validate_tarfile(self, self.tarball)
+        #     self.tarfile_path = self.tarball
 
-        def handle_remote_tar(self):
+        # def handle_remote_tar(self):
+        #     """copied from /dbt/deps/registry.py install
+        #     However we can't just package download/untar/install together as one
+        #     step like in registry. With registry we can simply untar into the
+        #     packages folder. Here, first we need to download and untar to temporary
+        #     location to do some validation then discovery on internals of the tarfile."""
+
+        #     tar_name = "{}.tar.gz".format(self.get_temp_name())
+        #     tar_path = os.path.realpath(os.path.join(get_downloads_path(), tar_name))
+        #     system.make_directory(os.path.dirname(tar_path))
+
+        #     download_url = self.tarball
+        #     download_untar_fn = functools.partial(
+        #         system.download, download_url, tar_path
+        #     )
+        #     connection_exception_retry(download_untar_fn, 5)
+
+        #     # validate_checksum(self, tar_path)
+        #     # validate_tarfile(self, tar_path)
+        #     self.tarfile_path = tar_path
+
+        if os.path.isfile(self.tarball):
+            # try local first
+            self.tarfile_path = self.tarball
+            tarball_type = 'local'
+        else:
+            # assume download if not local file
             """copied from /dbt/deps/registry.py install
             However we can't just package download/untar/install together as one
             step like in registry. With registry we can simply untar into the
@@ -102,26 +128,23 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
             )
             connection_exception_retry(download_untar_fn, 5)
 
-            validate_checksum(self, tar_path)
-            validate_tarfile(self, tar_path)
+            # validate_checksum(self, tar_path)
+            # validate_tarfile(self, tar_path)
             self.tarfile_path = tar_path
+            tarball_type = 'remote'
 
-        if os.path.isfile(self.tarball):
-            # try local first
-            handle_local_tar(self)
-            fire_event(TarballReceivedFeedback(tarball_type="local"))
-        else:
-            # assume download if not local file
-            handle_remote_tar(self)
-            fire_event(TarballReceivedFeedback(tarball_type="remote"))
+        validate_checksum(self, self.tarfile_path)
+        validate_tarfile(self, self.tarfile_path)
+        fire_event(TarballReceivedFeedback(tarball_type=tarball_type))
 
         """Assumed structure:
           Like registry: package at root of tarfile.
-            Example: dbt-utils-0.6.6.tgz -> /dbt-utils-0.6.6/dbt_project.yml
+            Example: dbt-utils-0.6.6.tgz -> 
+                /dbt-utils/dbt_project.yml
             This is default package format this is expected.
           Like git subdirectory: package is in subdirectory of tarfile.
-            Example: packages-tar.tgz -> /packages-tar/dbt-utils-0.6.6/dbt_project.yml
-            Use subdirectory setting as `packages-tar/dbt-utils-0.6.6` in this case.
+            Example: packages-tar.tgz -> /packages-folder/dbt-utils-0.6.6/dbt_project.yml
+            Use subdirectory setting as `packages-folder/dbt-utils-0.6.6` in this case.
         """
         with tarfile.open(self.tarfile_path, "r:gz") as tarball:
             members = tarball.getmembers()
