@@ -46,16 +46,14 @@ class TarballPackageMixin:
 class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
     def __init__(
         self,
-        tarball: Union[str, tarfile.TarFile],
+        tarball: str,
         sha1: Optional[str] = None,
         subdirectory: Optional[str] = None,
     ) -> None:
         super().__init__(tarball)
         self.sha1 = sha1
         self.subdirectory = subdirectory
-        # self.tarfile_bin = self.get_tarfile()
-        # self.get_tarfile()
-        # self.tar_dir_name = self.resolve_tar_dir()
+        self.prep_tarfile()
 
     def get_version(self):
         return None
@@ -63,159 +61,146 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
     def nice_version_name(self):
         return "<tarball @ {}>".format(self.tarball)
 
-    def get_tar_size(self):
-        return sum(x.size for x in self.tarfile_bin.getmembers())
+    def get_temp_name(self):
+        import tempfile
 
-    def file_sha1(self, fp_in: str):
-        if type(fp_in) is str:
-            with open(fp_in, 'rb') as fp:
-                return hashlib.sha1(fp.read()).hexdigest()
-        elif hasattr(fp_in, 'read'):
-            return hashlib.sha1(fp_in.read()).hexdigest()
-        else:
-            raise ValueError()
+        return next(tempfile._get_candidate_names())
 
-    def get_tarfile(self):
-        def validate_checksum(self, filepath):
+    def prep_tarfile(self):
+        def validate_checksum(self, filepath: str):
             if self.sha1:
-                checksum = self.file_sha1(filepath)
+                checksum = system.file_sha1(filepath)
                 if not checksum == self.sha1:
-                    package_sha1_fail(checksum, self.sha1)
+                    package_sha1_fail(filepath, checksum, self.sha1)
+                fire_event(Sha1ChecksumPasses(sha1=self.sha1, filepath=filepath))
 
-        def validate_tarfile(self, filepath):
+        def validate_tarfile(self, filepath: str):
             if not tarfile.is_tarfile(filepath):
                 msg = f"{filepath} is not a valid tarfile."
                 raise DependencyException(msg)
 
         def handle_local_tar(self):
-            # pass through local tarfile path primarily for testing
+            # basic tarfile path passthrough primarily for testing
             validate_checksum(self, self.tarball)
             validate_tarfile(self, self.tarball)
-            tar = tarfile.open(self.tarball, "r:gz")
-            self.tarfile_bin = tar
+            self.tarfile_path = self.tarball
 
         def handle_remote_tar(self):
-            with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
-                download_url = self.tarball
+            """copied from /dbt/deps/registry.py install
+            However we can't just package download/untar/install together as one
+            step like in registry. With registry we can simply untar into the
+            packages folder. Here, first we need to download and untar to temporary
+            location to do some validation then discovery on internals of the tarfile."""
 
-                download_untar_fn = functools.partial(
-                    self.download_tar
-                    , download_url
-                    , named_temp_file.name
-                )
-                connection_exception_retry(download_untar_fn, 5)
+            tar_name = "{}.tar.gz".format(self.get_temp_name())
+            tar_path = os.path.realpath(os.path.join(get_downloads_path(), tar_name))
+            system.make_directory(os.path.dirname(tar_path))
 
-                validate_checksum(self, named_temp_file.name)
-                validate_tarfile(self, named_temp_file.name)
-                tar = tarfile.open(named_temp_file.name, "r:gz")
-                self.tarfile_bin = tar
+            download_url = self.tarball
+            download_untar_fn = functools.partial(
+                system.download, download_url, tar_path
+            )
+            connection_exception_retry(download_untar_fn, 5)
 
-        if type(self.tarball) is str:
-            if os.path.isfile(self.tarball):
-                print('handle_local_tar')
-                handle_local_tar(self)
-            else:
-                # assume download if str and not local file
-                print('handle_remote_tar')
-                handle_remote_tar(self)
-        elif type(self.tarball) is tarfile.TarFile:
-            # pass through TarFile object primarily for testing
-            # no explicit hash test here
-            self.tarfile_bin = self.tarball
+            validate_checksum(self, tar_path)
+            validate_tarfile(self, tar_path)
+            self.tarfile_path = tar_path
+
+        if os.path.isfile(self.tarball):
+            # try local first
+            handle_local_tar(self)
+            fire_event(TarballReceivedFeedback(tarball_type="local"))
         else:
-            raise ValueError('unknown tarball type defined')
+            # assume download if not local file
+            handle_remote_tar(self)
+            fire_event(TarballReceivedFeedback(tarball_type="remote"))
 
-        if not self.get_tar_size() <= TARFILE_MAX_SIZE:
-            msg = ("Tarfile size is larger than limit "
-                   f"of {TARFILE_MAX_SIZE}.")
-            raise DependencyException(msg)
-
-            fire_event(Sha1ChecksumPasses())
-
-    def download_tar(self, download_url, tar_path):
+        """Assumed structure:
+          Like registry: package at root of tarfile.
+            Example: dbt-utils-0.6.6.tgz -> /dbt-utils-0.6.6/dbt_project.yml
+            This is default package format this is expected.
+          Like git subdirectory: package is in subdirectory of tarfile.
+            Example: packages-tar.tgz -> /packages-tar/dbt-utils-0.6.6/dbt_project.yml
+            Use subdirectory setting as `packages-tar/dbt-utils-0.6.6` in this case.
         """
-        Sometimes the download of the files fails and we want to retry.  Sometimes the
-        download appears successful but the file did not make it through as expected
-        (generally due to a github incident).  Either way we want to retry downloading
-        and untarring to see if we can get a success.  Call this within
-        `_connection_exception_retry`
-        """
-
-        system.download(download_url, tar_path)
-
-    def resolve_tar_dir(self):
-        ''' Assumed structure:
-              Tarfile has one folder in the a root dir 'project folder'.
-              This 'project folder' contains the package to install.
-              The 'project folder' name is the name of the package.  
-              This mirrors the format established for packages on dbt hub.
-            Or user can specify subdirectory arg in packages.yaml to manually
-              specify folder in tar root to use for install.
-              Tarfile has one folder in the a root dir matching subdirectory 
-              name.
-            '''
-        members = self.tarfile_bin.getmembers()
-        tarfile_dir_list = [x.name for x in members if x.isdir()]
-        if len(tarfile_dir_list) < 1:
-            package_structure_malformed()
-
-        if not self.subdirectory:
-            tar_dir_name = system.resolve_tar_dir_name(self.tarfile_bin)
-            if tar_dir_name == '':
-                package_structure_malformed()
-
-        else:
-            if self.subdirectory not in tarfile_dir_list:
-                msg = (f"{self.subdirectory} is not a valid dir in tarfile.")
+        with tarfile.open(self.tarfile_path, "r:gz") as tarball:
+            members = tarball.getmembers()
+            tar_size = sum(x.size for x in members)
+            if not tar_size <= TARFILE_MAX_SIZE:
+                msg = "Tarfile size is larger than limit " f"of {TARFILE_MAX_SIZE}."
                 raise DependencyException(msg)
 
-            tar_dir_name = self.subdirectory
-            # check that this actually exists in tarfile?
+            tarfile_dir_list = [x.name for x in members if x.isdir()]
+            # print(tarfile_dir_list)
 
-        return tar_dir_name
+            # subdirectory arg not given, get root name
+            if not self.subdirectory:
+                if len(tarfile_dir_list) > 0:
+                    resolved_tar_dir_name = os.path.commonpath(tarfile_dir_list)
+                    # returns "" if multiple candidates for commonpath
+                else:
+                    # e.g. if tarfile has files and no parent dir
+                    resolved_tar_dir_name = ""
+
+                if resolved_tar_dir_name == "":
+                    package_structure_malformed()
+                tar_dir_name = resolved_tar_dir_name
+
+            # user gave subdirectory, check if exists
+            else:
+                # first validate that tarfile has subdirs
+                if len(tarfile_dir_list) < 1:
+                    package_structure_malformed()
+                if self.subdirectory not in tarfile_dir_list:
+                    msg = f"{self.subdirectory} is not a valid dir in tarfile."
+                    raise DependencyException(msg)
+                tar_dir_name = self.subdirectory
+
+        fire_event(
+            UntarProjectRoot(subdirectory=self.subdirectory, tar_dir_name=tar_dir_name)
+        )
+        self.subdirectory = tar_dir_name
+
+        tar_name = self.get_temp_name()
+        untar_path = os.path.realpath(os.path.join(get_downloads_path(), tar_name))
+        system.make_directory(os.path.dirname(untar_path))
+        system.untar_package(self.tarfile_path, untar_path)
+        self.untar_path = untar_path
 
     def _fetch_metadata(self, project, renderer):
-        self.get_tarfile()
-
-        tarfile_bin = self.tarfile_bin
-        tar_dir_name = self.resolve_tar_dir()
-
-        fire_event(UntarProjectRoot(
-            subdirectory=self.subdirectory,
-            tar_dir_name=tar_dir_name))
-
-        tar_path = os.path.realpath(
-            os.path.join(get_downloads_path(), tar_dir_name)
+        # have an untared folder in temp storage, will pass
+        # to metadata for subsequent file checks to be performed
+        # on that temp dir
+        tar_dir_name = self.subdirectory
+        tar_extracted_root = os.path.realpath(
+            os.path.join(self.untar_path, tar_dir_name)
         )
-        system.make_directory(os.path.dirname(tar_path))
-
-        tarfile_bin.extractall(path=tar_path)
-
-        tar_extracted_root = os.path.join(tar_path, tar_dir_name)
 
         loaded = Project.from_project_root(tar_extracted_root, renderer)
 
         return ProjectPackageMetadata.from_project(loaded)
 
     def install(self, project, renderer):
-        self.get_tarfile()
+        """copied from /dbt/deps/registry.py install
+        We can't just package download/untar/install together as one
+        step like in registry. So far we've untarred to a temp location
+        scanned the tarfile for folder structure, and determined where
+        in the tarfile the package is located, and destination folder
+        name in the packages install location. Do a lot of recycling here
+        mostly just building out paths for final copy operation. Temp untar
+        location + subdir if needed -> package install + dest folder name"""
+        tar_name = self.get_temp_name()
+        untar_path = os.path.realpath(os.path.join(get_downloads_path(), tar_name))
+        system.make_directory(os.path.dirname(untar_path))
+        system.untar_package(self.tarfile_path, untar_path)
 
-        tar_dir_name = self.resolve_tar_dir()
-
-        tar_path = os.path.realpath(
-            os.path.join(get_downloads_path(), tar_dir_name)
-        )
-        system.make_directory(os.path.dirname(tar_path))
-        # tar_extracted_root = os.path.join(tar_path, tar_dir_name)
-
-        # loaded = Project.from_project_root(tar_extracted_root, renderer)
+        tar_dir_name = self.subdirectory
+        source_path = os.path.realpath(os.path.join(untar_path, tar_dir_name))
 
         deps_path = project.packages_install_path
-        package_name = self.get_project_name(project, renderer)
-        # tarfile_bin.extractall(path=deps_path)
+        fire_event(CopyFeedback(source_path=source_path, dest_path=deps_path))
 
-        system.untar_tarfile(TarFile=self.tarfile_bin, dest_dir=deps_path,
-                             rename_to=package_name)
+        system.move(source_path, deps_path)
 
 
 class TarballUnpinnedPackage(
