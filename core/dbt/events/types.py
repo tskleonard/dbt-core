@@ -312,10 +312,22 @@ class RegistryProgressGETResponse(DebugLevel):
 
 @dataclass
 class Sha1ChecksumPasses(DebugLevel):
+    sha1: str
+    filepath: str
     code: str = "M049"
 
     def message(self) -> str:
-        return f'sha1 checksum passes ({self.sha1})'
+        return f"sha1 checksum passes for {self.filepath} [{self.sha1}]"
+
+
+@dataclass
+class CopyFeedback(DebugLevel):
+    source_path: str
+    dest_path: str
+    code: str = "M050"
+
+    def message(self) -> str:
+        return f"Moving path {self.source_path} to {self.dest_path}"
 
 
 @dataclass
@@ -330,8 +342,20 @@ class UntarProjectRoot(DebugLevel):
         else:
             txt_condition = "resolved"
 
-        return (f"Using {txt_condition} {self.tar_dir_name}/ directory as "
-                "project root in tarfile.")
+        return (
+            f"Using {txt_condition} {self.tar_dir_name}/ directory as "
+            "project root in tarfile."
+        )
+
+
+@dataclass
+class TarballReceivedFeedback(DebugLevel):
+    tarball_type: str
+    code: str = "M049"
+
+    def message(self) -> str:
+        return f"Have {self.tarball_type} tarball"
+
 
 # TODO this was actually `logger.exception(...)` not `logger.error(...)`
 @dataclass
