@@ -23,6 +23,7 @@ from dbt.version import get_installed_version
 
 from dbt.dataclass_schema import ValidationError
 
+
 class TestLocalPackage(unittest.TestCase):
     def test_init(self):
         a_contract = LocalPackage.from_dict({'local': '/path/to/package'})
@@ -35,133 +36,47 @@ class TestLocalPackage(unittest.TestCase):
 
 
 class TestTarballPackage(unittest.TestCase):
-    import tarfile
-    from tempfile import NamedTemporaryFile
-    
-    def build_tar(self, named_temp_file, tar_def):
-        import tarfile
-        tar = tarfile.open(named_temp_file.name, mode='w:gz')
-        for d in tar_def:
-            t = tarfile.TarInfo(d['name'])
-            if d.get('type'):
-                t.type = d.get('type')
-            if d.get('size'):
-                t.size = d.get('size')
-            tar.addfile(t)
-        tar.close()
-        return named_temp_file.name
+    def test_TarballPackage(self):
+        from dbt.contracts.project import RegistryPackageMetadata
+        from mashumaro.exceptions import MissingField
 
-    bad_tar_def = [{'size' : 1000, 'name' : 'my_file.py'}]
-    good_tar_def = [{'type' : tarfile.DIRTYPE, 'name' : 'dir_1'}
-                    , {'size' : 1000, 'name' : 'dir_1/my_file.py'}]
-    many_dir_dar_def = [{'type' : tarfile.DIRTYPE, 'name' : 'dir_1'}
-                        , {'type' : tarfile.DIRTYPE, 'name' : 'dir_2'}
-                        , {'size' : 1000, 'name' : 'dir_1/my_file.py'}]
-        
-    def test_init(self):
+        dict_well_formed_contract = (
+            {'tarball': 'http://example.com', 
+             'name': 'my_cool_package',
+             'version': 123})
+
         a_contract = (
-            TarballPackage.from_dict({'tarball': 'http://example.com'}))
-        self.assertEqual(a_contract.tarball, 'http://example.com')
-        a = TarballUnpinnedPackage.from_contract(a_contract)
-        self.assertEqual(a.tarball, 'http://example.com')
-        
-    def test_local_write(self):
-        from dbt.clients import system
-        from dbt.deps.base import get_downloads_path
-        from tempfile import NamedTemporaryFile
-        
-        with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
-            good_tar_path = self.build_tar(named_temp_file, self.good_tar_def)
-            # Test off disk write.
-            this_hash = system.file_sha1(good_tar_path)
-            a_contract = (
-                TarballPackage.from_dict(
-                    {'tarball': good_tar_path,
-                     'sha1' : this_hash}
-                ))
-            a = TarballUnpinnedPackage.from_contract(a_contract)
-            
-            self.assertEqual(this_hash, a.sha1)
-            
-    def test_init_tarfiles(self):
-        from dbt.deps.base import get_downloads_path
-        from tempfile import NamedTemporaryFile
-        
-        with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
-            good_tar_path = self.build_tar(named_temp_file, self.good_tar_def)
-            
-            a_contract = (
-                TarballPackage.from_dict({'tarball': good_tar_path}))
-            a = TarballUnpinnedPackage.from_contract(a_contract)
-            a_pinned = a.resolved()
-            self.assertEqual(a_pinned.subdirectory, 'dir_1')
-            
-        with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
-            bad_tar_path = self.build_tar(named_temp_file, self.bad_tar_def)
-            
-            a_contract = (
-                TarballPackage.from_dict({'tarball': bad_tar_path}))
-            a = TarballUnpinnedPackage.from_contract(a_contract)
-            with self.assertRaises(dbt.exceptions.DependencyException):
-                a_pinned = a.resolved()
+            TarballPackage.from_dict(dict_well_formed_contract))
 
-    def test_tarfile_args(self):   
-        from dbt.deps.base import get_downloads_path
-        from dbt.clients import system
-        from tempfile import NamedTemporaryFile
-        
-        a_contract = TarballPackage.from_dict(
-            {'tarball': 'http://example.com', 'sha1': '123'
-             , 'subdirectory': 'subdir'})
+        # check contract and resolver
         self.assertEqual(a_contract.tarball, 'http://example.com')
-        self.assertEqual(a_contract.sha1, '123')
-        self.assertEqual(a_contract.subdirectory, 'subdir')
+        self.assertEqual(a_contract.name, 'my_cool_package')
+        self.assertEqual(a_contract.version, 123)
 
         a = TarballUnpinnedPackage.from_contract(a_contract)
         self.assertEqual(a.tarball, 'http://example.com')
-        self.assertEqual(a.sha1, '123')
-        self.assertEqual(a.subdirectory, 'subdir')
+        self.assertEqual(a.package, 'my_cool_package')
+        self.assertEqual(a.version, 123)
         
-        with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
-            good_tar_path = self.build_tar(named_temp_file, self.good_tar_def)
-                        
-            known_sha = system.file_sha1(good_tar_path)
-            
-            a_contract = TarballPackage.from_dict(
-                {'tarball': good_tar_path, 'sha1': known_sha
-                 , 'subdirectory': 'dir_1'})
-            a = TarballUnpinnedPackage.from_contract(a_contract)
-            a_pinned = a.resolved()
+        a_pinned = a.resolved()
+        self.assertEqual(a_pinned.source_type(), 'tarball')
 
-            self.assertEqual(a_pinned.sha1, known_sha)
-            self.assertEqual(a_pinned.subdirectory, 'dir_1')
-
-            a_contract = TarballPackage.from_dict(
-                {'tarball': good_tar_path, 'sha1': known_sha})
-            a = TarballUnpinnedPackage.from_contract(a_contract)
-            a_pinned = a.resolved()
-            self.assertEqual(a_pinned.sha1, known_sha)
-            self.assertEqual(a_pinned.subdirectory, 'dir_1')
+        # check bad contract (no name) fails
+        dict_missing_name_should_fail_on_contract = (
+            {'tarball': 'http://example.com', 
+             'version': 123})
         
-        with NamedTemporaryFile(dir=get_downloads_path()) as named_temp_file:
-            many_dir_tar_path = self.build_tar(named_temp_file, self.many_dir_dar_def)
-                        
-            a_contract = (
-                TarballPackage.from_dict({'tarball': many_dir_tar_path
-                                         , 'subdirectory': 'subdir'}))
-            a = TarballUnpinnedPackage.from_contract(a_contract)
-            with self.assertRaises(dbt.exceptions.DependencyException):
-                a_pinned = a.resolved()
+        with self.assertRaises(MissingField):
+            TarballPackage.from_dict(dict_missing_name_should_fail_on_contract)
 
-            a_contract = (
-                TarballPackage.from_dict({'tarball': many_dir_tar_path}))
-            a = TarballUnpinnedPackage.from_contract(a_contract)
-            with self.assertRaises(dbt.exceptions.DependencyException):
-                a_pinned = a.resolved()
+        # check RegistryPackageMetadata - it is used in TarballUnpinnedPackage
+        dct = {'name' : a.package,
+               'packages': [],  # note: required by RegistryPackageMetadata
+               'downloads' : {'tarball' : a_pinned.tarball}}
 
+        metastore = RegistryPackageMetadata.from_dict(dct)
+        self.assertEqual(metastore.downloads.tarball, 'http://example.com')
 
-unittest.main(argv=['ignored', '-v'], exit=False)
-            
 
 class TestGitPackage(unittest.TestCase):
     def test_init(self):
