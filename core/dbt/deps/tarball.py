@@ -50,13 +50,9 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         build RegistryPackageMetadata from info passed via packages.yml since no
         'metadata' service exists in this case.
         """
-        if self.version:
-            name = "{}.{}".format(self.package, self.version)
-        else:
-            name = self.package
 
         dct = {
-            "name": name,
+            "name": self.package,
             "packages": [],  # note: required by RegistryPackageMetadata
             "downloads": {"tarball": self.tarball},
         }
