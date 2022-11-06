@@ -1,6 +1,7 @@
 import os
 import time
 import json
+from pathlib import Path
 from abc import abstractmethod
 from concurrent.futures import as_completed
 from datetime import datetime
@@ -25,15 +26,17 @@ from dbt.logger import (
     ModelMetadata,
     NodeCount,
 )
-from dbt.events.functions import fire_event
+from dbt.events.functions import fire_event, warn_or_error
 from dbt.events.types import (
     EmptyLine,
-    PrintCancelLine,
+    LogCancelLine,
     DefaultSelector,
     NodeStart,
     NodeFinished,
     QueryCancelationUnsupported,
     ConcurrencyLine,
+    EndRunResult,
+    NothingToDo,
 )
 from dbt.contracts.graph.compiled import CompileResultNode
 from dbt.contracts.graph.manifest import Manifest
@@ -45,16 +48,15 @@ from dbt.exceptions import (
     NotImplementedException,
     RuntimeException,
     FailFastException,
-    warn_or_error,
 )
 
 from dbt.graph import GraphQueue, NodeSelector, SelectionSpec, parse_difference, Graph
 from dbt.parser.manifest import ManifestLoader
+import dbt.tracking
 
 import dbt.exceptions
 from dbt import flags
 import dbt.utils
-from dbt.ui import warning_tag
 
 RESULT_FILE_NAME = "run_results.json"
 MANIFEST_FILE_NAME = "manifest.json"
@@ -82,13 +84,20 @@ class ManifestTask(ConfiguredTask):
     def compile_manifest(self):
         if self.manifest is None:
             raise InternalException("compile_manifest called before manifest was loaded")
+
+        # we cannot get adapter in init since it will break rpc #5579
         adapter = get_adapter(self.config)
         compiler = adapter.get_compiler()
         self.graph = compiler.compile(self.manifest)
 
     def _runtime_initialize(self):
         self.load_manifest()
+
+        start_compile_manifest = time.perf_counter()
         self.compile_manifest()
+        compile_time = time.perf_counter() - start_compile_manifest
+        if dbt.tracking.active_user is not None:
+            dbt.tracking.track_runnable_timing({"graph_compilation_elapsed": compile_time})
 
 
 class GraphRunnableTask(ManifestTask):
@@ -110,7 +119,9 @@ class GraphRunnableTask(ManifestTask):
 
     def set_previous_state(self):
         if self.args.state is not None:
-            self.previous_state = PreviousState(self.args.state)
+            self.previous_state = PreviousState(
+                path=self.args.state, current_path=Path(self.config.target_path)
+            )
 
     def index_offset(self, value: int) -> int:
         return value
@@ -162,7 +173,7 @@ class GraphRunnableTask(ManifestTask):
                 self._flattened_nodes.append(self.manifest.sources[uid])
             else:
                 raise InternalException(
-                    f"Node selection returned {uid}, expected a node or a " f"source"
+                    f"Node selection returned {uid}, expected a node or a source"
                 )
 
         self.num_nodes = len([n for n in self._flattened_nodes if not n.is_ephemeral_model])
@@ -221,7 +232,7 @@ class GraphRunnableTask(ManifestTask):
                         NodeFinished(
                             node_info=runner.node.node_info,
                             unique_id=runner.node.unique_id,
-                            run_result=result.to_dict(),
+                            run_result=result.to_msg(),
                         )
                     )
             # `_event_status` dict is only used for logging.  Make sure
@@ -352,7 +363,7 @@ class GraphRunnableTask(ManifestTask):
                             continue
                     # if we don't have a manifest/don't have a node, print
                     # anyway.
-                    fire_event(PrintCancelLine(conn_name=conn_name))
+                    fire_event(LogCancelLine(conn_name=conn_name))
 
         pool.join()
 
@@ -390,8 +401,17 @@ class GraphRunnableTask(ManifestTask):
         for dep_node_id in self.graph.get_dependent_nodes(node_id):
             self._skipped_children[dep_node_id] = cause
 
-    def populate_adapter_cache(self, adapter):
-        adapter.set_relations_cache(self.manifest)
+    def populate_adapter_cache(self, adapter, required_schemas: Set[BaseRelation] = None):
+        start_populate_cache = time.perf_counter()
+        if flags.CACHE_SELECTED_ONLY is True:
+            adapter.set_relations_cache(self.manifest, required_schemas=required_schemas)
+        else:
+            adapter.set_relations_cache(self.manifest)
+        cache_populate_time = time.perf_counter() - start_populate_cache
+        if dbt.tracking.active_user is not None:
+            dbt.tracking.track_runnable_timing(
+                {"adapter_cache_construction_elapsed": cache_populate_time}
+            )
 
     def before_hooks(self, adapter):
         pass
@@ -438,8 +458,7 @@ class GraphRunnableTask(ManifestTask):
         if len(self._flattened_nodes) == 0:
             with TextOnly():
                 fire_event(EmptyLine())
-            msg = "Nothing to do. Try checking your model " "configs and model specification args"
-            warn_or_error(msg, log_fmt=warning_tag("{}"))
+            warn_or_error(NothingToDo())
             result = self.get_result(
                 results=[],
                 generated_at=datetime.utcnow(),
@@ -451,6 +470,18 @@ class GraphRunnableTask(ManifestTask):
             selected_uids = frozenset(n.unique_id for n in self._flattened_nodes)
             result = self.execute_with_hooks(selected_uids)
 
+        # We have other result types here too, including FreshnessResult
+        if isinstance(result, RunExecutionResult):
+            result_msgs = [result.to_msg() for result in result.results]
+            fire_event(
+                EndRunResult(
+                    results=result_msgs,
+                    generated_at=result.generated_at,
+                    elapsed_time=result.elapsed_time,
+                    success=GraphRunnableTask.interpret_results(result.results),
+                )
+            )
+
         if flags.WRITE_JSON:
             self.write_manifest()
             self.write_result(result)
@@ -458,7 +489,8 @@ class GraphRunnableTask(ManifestTask):
         self.task_end_messages(result.results)
         return result
 
-    def interpret_results(self, results):
+    @classmethod
+    def interpret_results(cls, results):
         if results is None:
             return False
 
@@ -489,8 +521,7 @@ class GraphRunnableTask(ManifestTask):
 
         return result
 
-    def create_schemas(self, adapter, selected_uids: Iterable[str]):
-        required_schemas = self.get_model_schemas(adapter, selected_uids)
+    def create_schemas(self, adapter, required_schemas: Set[BaseRelation]):
         # we want the string form of the information schema database
         required_databases: Set[BaseRelation] = set()
         for required in required_schemas:

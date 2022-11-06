@@ -126,9 +126,15 @@ class PostgresAdapter(SQLAdapter):
 
         self._link_cached_database_relations(schemas)
 
-    def _relations_cache_for_schemas(self, manifest):
-        super()._relations_cache_for_schemas(manifest)
+    def _relations_cache_for_schemas(self, manifest, cache_schemas=None):
+        super()._relations_cache_for_schemas(manifest, cache_schemas)
         self._link_cached_relations(manifest)
 
     def timestamp_add_sql(self, add_to: str, number: int = 1, interval: str = "hour") -> str:
         return f"{add_to} + interval '{number} {interval}'"
+
+    def valid_incremental_strategies(self):
+        """The set of standard builtin strategies which this adapter supports out-of-the-box.
+        Not used to validate custom strategies defined by end users.
+        """
+        return ["append", "delete+insert"]

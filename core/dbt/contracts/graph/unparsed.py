@@ -1,15 +1,19 @@
+import re
+
+from dbt import deprecations
 from dbt.node_types import NodeType
 from dbt.contracts.util import (
     AdditionalPropertiesMixin,
     Mergeable,
     Replaceable,
+    rename_metric_attr,
 )
 
 # trigger the PathEncoder
 import dbt.helper_types  # noqa:F401
-from dbt.exceptions import CompilationException
+from dbt.exceptions import CompilationException, ParsingException
 
-from dbt.dataclass_schema import dbtClassMixin, StrEnum, ExtensibleDbtClassMixin
+from dbt.dataclass_schema import dbtClassMixin, StrEnum, ExtensibleDbtClassMixin, ValidationError
 
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -20,7 +24,6 @@ from typing import Optional, List, Union, Dict, Any, Sequence
 @dataclass
 class UnparsedBaseNode(dbtClassMixin, Replaceable):
     package_name: str
-    root_path: str
     path: str
     original_file_path: str
 
@@ -30,26 +33,27 @@ class UnparsedBaseNode(dbtClassMixin, Replaceable):
 
 
 @dataclass
-class HasSQL:
-    raw_sql: str
+class HasCode(dbtClassMixin):
+    raw_code: str
+    language: str
 
     @property
     def empty(self):
-        return not self.raw_sql.strip()
+        return not self.raw_code.strip()
 
 
 @dataclass
-class UnparsedMacro(UnparsedBaseNode, HasSQL):
+class UnparsedMacro(UnparsedBaseNode, HasCode):
     resource_type: NodeType = field(metadata={"restrict": [NodeType.Macro]})
 
 
 @dataclass
-class UnparsedGenericTest(UnparsedBaseNode, HasSQL):
+class UnparsedGenericTest(UnparsedBaseNode, HasCode):
     resource_type: NodeType = field(metadata={"restrict": [NodeType.Macro]})
 
 
 @dataclass
-class UnparsedNode(UnparsedBaseNode, HasSQL):
+class UnparsedNode(UnparsedBaseNode, HasCode):
     name: str
     resource_type: NodeType = field(
         metadata={
@@ -80,6 +84,7 @@ class UnparsedRunHook(UnparsedNode):
 @dataclass
 class Docs(dbtClassMixin, Replaceable):
     show: bool = True
+    node_color: Optional[str] = None
 
 
 @dataclass
@@ -226,7 +231,7 @@ class ExternalTable(AdditionalPropertiesAllowed, Mergeable):
     file_format: Optional[str] = None
     row_format: Optional[str] = None
     tbl_properties: Optional[str] = None
-    partitions: Optional[List[ExternalPartition]] = None
+    partitions: Optional[Union[List[str], List[ExternalPartition]]] = None
 
     def __bool__(self):
         return self.location is not None
@@ -242,6 +247,7 @@ class Quoting(dbtClassMixin, Mergeable):
 
 @dataclass
 class UnparsedSourceTableDefinition(HasColumnTests, HasTests):
+    config: Dict[str, Any] = field(default_factory=dict)
     loaded_at_field: Optional[str] = None
     identifier: Optional[str] = None
     quoting: Quoting = field(default_factory=Quoting)
@@ -322,6 +328,7 @@ class SourcePatch(dbtClassMixin, Replaceable):
     path: Path = field(
         metadata=dict(description="The path to the patch-defining yml file"),
     )
+    config: Dict[str, Any] = field(default_factory=dict)
     description: Optional[str] = None
     meta: Optional[Dict[str, Any]] = None
     database: Optional[str] = None
@@ -356,7 +363,6 @@ class SourcePatch(dbtClassMixin, Replaceable):
 @dataclass
 class UnparsedDocumentation(dbtClassMixin, Replaceable):
     package_name: str
-    root_path: str
     path: str
     original_file_path: str
 
@@ -429,11 +435,21 @@ class UnparsedExposure(dbtClassMixin, Replaceable):
     type: ExposureType
     owner: ExposureOwner
     description: str = ""
+    label: Optional[str] = None
     maturity: Optional[MaturityType] = None
     meta: Dict[str, Any] = field(default_factory=dict)
     tags: List[str] = field(default_factory=list)
     url: Optional[str] = None
     depends_on: List[str] = field(default_factory=list)
+    config: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def validate(cls, data):
+        super(UnparsedExposure, cls).validate(data)
+        if "name" in data:
+            # name can only contain alphanumeric chars and underscores
+            if not (re.match(r"[\w-]+$", data["name"])):
+                deprecations.warn("exposure-name", exposure=data["name"])
 
 
 @dataclass
@@ -444,17 +460,66 @@ class MetricFilter(dbtClassMixin, Replaceable):
     value: str
 
 
+class MetricTimePeriod(StrEnum):
+    day = "day"
+    week = "week"
+    month = "month"
+    year = "year"
+
+    def plural(self) -> str:
+        return str(self) + "s"
+
+
+@dataclass
+class MetricTime(dbtClassMixin, Mergeable):
+    count: Optional[int] = None
+    period: Optional[MetricTimePeriod] = None
+
+    def __bool__(self):
+        return self.count is not None and self.period is not None
+
+
 @dataclass
 class UnparsedMetric(dbtClassMixin, Replaceable):
-    model: str
     name: str
     label: str
-    type: str
+    calculation_method: str
+    timestamp: str
+    expression: str
     description: str = ""
-    sql: Optional[str] = None
-    timestamp: Optional[str] = None
     time_grains: List[str] = field(default_factory=list)
     dimensions: List[str] = field(default_factory=list)
+    window: Optional[MetricTime] = None
+    model: Optional[str] = None
     filters: List[MetricFilter] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)
     tags: List[str] = field(default_factory=list)
+    config: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def validate(cls, data):
+        data = rename_metric_attr(data, raise_deprecation_warning=True)
+        super(UnparsedMetric, cls).validate(data)
+        if "name" in data:
+            errors = []
+            if " " in data["name"]:
+                errors.append("cannot contain spaces")
+            # This handles failing queries due to too long metric names.
+            # It only occurs in BigQuery and Snowflake (Postgres/Redshift truncate)
+            if len(data["name"]) > 250:
+                errors.append("cannot contain more than 250 characters")
+            if not (re.match(r"^[A-Za-z]", data["name"])):
+                errors.append("must begin with a letter")
+            if not (re.match(r"[\w-]+$", data["name"])):
+                errors.append("must contain only letters, numbers and underscores")
+
+            if errors:
+                raise ParsingException(
+                    f"The metric name '{data['name']}' is invalid.  It {', '.join(e for e in errors)}"
+                )
+
+        if data.get("model") is None and data.get("calculation_method") != "derived":
+            raise ValidationError("Non-derived metrics require a 'model' property")
+
+        if data.get("model") is not None and data.get("calculation_method") == "derived":
+            raise ValidationError("Derived metrics cannot have a 'model' property")

@@ -41,7 +41,7 @@ class CompiledNodeMixin(dbtClassMixin):
 
 @dataclass
 class CompiledNode(ParsedNode, CompiledNodeMixin):
-    compiled_sql: Optional[str] = None
+    compiled_code: Optional[str] = None
     extra_ctes_injected: bool = False
     extra_ctes: List[InjectedCTE] = field(default_factory=list)
     relation_name: Optional[str] = None
@@ -97,6 +97,7 @@ class CompiledSeedNode(CompiledNode):
     # keep this in sync with ParsedSeedNode!
     resource_type: NodeType = field(metadata={"restrict": [NodeType.Seed]})
     config: SeedConfig = field(default_factory=SeedConfig)
+    root_path: Optional[str] = None
 
     @property
     def empty(self):

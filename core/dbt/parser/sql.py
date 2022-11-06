@@ -43,7 +43,7 @@ class SqlBlockParser(SimpleSQLParser[ParsedSqlNode]):
         return os.path.join("sql", block.name)
 
     def parse_remote(self, sql: str, name: str) -> ParsedSqlNode:
-        source_file = SourceFile.remote(sql, self.project.project_name)
+        source_file = SourceFile.remote(sql, self.project.project_name, "sql")
         contents = SqlBlock(block_name=name, file=source_file)
         return self.parse_node(contents)
 
@@ -54,8 +54,8 @@ class SqlMacroParser(MacroParser):
             path="from remote system",
             original_file_path="from remote system",
             package_name=self.project.project_name,
-            raw_sql=contents,
-            root_path=self.project.project_root,
+            raw_code=contents,
+            language="sql",
             resource_type=NodeType.Macro,
         )
         for node in self.parse_unparsed_macros(base):

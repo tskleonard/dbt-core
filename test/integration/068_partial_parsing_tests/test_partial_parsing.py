@@ -172,6 +172,26 @@ class ModelTest(BasePPTest):
         results = self.run_dbt(["--partial-parse", "run"])
         self.assertEqual(len(results), 3)
 
+        # disable model three in the schema file
+        self.copy_file('test-files/models-schema4.yml', 'models/schema.yml')
+        results = self.run_dbt(["--partial-parse", "run"])
+        self.assertEqual(len(results), 2)
+
+        # update enabled config to be true for model three in the schema file
+        self.copy_file('test-files/models-schema4b.yml', 'models/schema.yml')
+        results = self.run_dbt(["--partial-parse", "run"])
+        self.assertEqual(len(results), 3)
+
+        # disable model three in the schema file again
+        self.copy_file('test-files/models-schema4.yml', 'models/schema.yml')
+        results = self.run_dbt(["--partial-parse", "run"])
+        self.assertEqual(len(results), 2)
+
+        # remove disabled config for model three in the schema file to check it gets enabled
+        self.copy_file('test-files/models-schema3.yml', 'models/schema.yml')
+        results = self.run_dbt(["--partial-parse", "run"])
+        self.assertEqual(len(results), 3)
+
         # Add a macro
         self.copy_file('test-files/my_macro.sql', 'macros/my_macro.sql')
         results = self.run_dbt(["--partial-parse", "run"])
@@ -430,7 +450,7 @@ class TestMacros(BasePPTest):
         self.assertEqual(len(results), 2)
         # type_one_model_a_
         self.assertEqual(results[0].status, TestStatus.Fail)
-        self.assertRegex(results[0].node.compiled_sql, r'union all')
+        self.assertRegex(results[0].node.compiled_code, r'union all')
         # type_two_model_a_
         self.assertEqual(results[1].status, TestStatus.Warn)
         self.assertEqual(results[1].node.config.severity, 'WARN')
@@ -503,10 +523,12 @@ class TestSnapshots(BasePPTest):
         manifest = get_manifest()
         snapshot_id = 'snapshot.test.orders_snapshot'
         self.assertIn(snapshot_id, manifest.nodes)
+        snapshot2_id = 'snapshot.test.orders2_snapshot'
+        self.assertIn(snapshot2_id, manifest.nodes)
 
         # run snapshot
         results = self.run_dbt(["--partial-parse", "snapshot"])
-        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results), 2)
 
         # modify snapshot
         self.copy_file('test-files/snapshot2.sql', 'snapshots/snapshot.sql')

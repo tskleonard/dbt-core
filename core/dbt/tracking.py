@@ -1,4 +1,5 @@
 from typing import Optional
+import traceback
 
 from dbt.clients.yaml_helper import (  # noqa:F401
     yaml,
@@ -35,7 +36,7 @@ COLLECTOR_PROTOCOL = "https"
 
 INVOCATION_SPEC = "iglu:com.dbt/invocation/jsonschema/1-0-2"
 PLATFORM_SPEC = "iglu:com.dbt/platform/jsonschema/1-0-0"
-RUN_MODEL_SPEC = "iglu:com.dbt/run_model/jsonschema/1-0-1"
+RUN_MODEL_SPEC = "iglu:com.dbt/run_model/jsonschema/1-0-2"
 INVOCATION_ENV_SPEC = "iglu:com.dbt/invocation_env/jsonschema/1-0-0"
 PACKAGE_INSTALL_SPEC = "iglu:com.dbt/package_install/jsonschema/1-0-0"
 RPC_REQUEST_SPEC = "iglu:com.dbt/rpc_request/jsonschema/1-0-1"
@@ -44,6 +45,7 @@ LOAD_ALL_TIMING_SPEC = "iglu:com.dbt/load_all_timing/jsonschema/1-0-3"
 RESOURCE_COUNTS = "iglu:com.dbt/resource_counts/jsonschema/1-0-0"
 EXPERIMENTAL_PARSER = "iglu:com.dbt/experimental_parser/jsonschema/1-0-0"
 PARTIAL_PARSER = "iglu:com.dbt/partial_parser/jsonschema/1-0-1"
+RUNNABLE_TIMING = "iglu:com.dbt/runnable/jsonschema/1-0-0"
 DBT_INVOCATION_ENV = "DBT_INVOCATION_ENV"
 
 
@@ -412,6 +414,18 @@ def track_partial_parser(options):
     )
 
 
+def track_runnable_timing(options):
+    context = [SelfDescribingJson(RUNNABLE_TIMING, options)]
+    assert active_user is not None, "Cannot track runnable info when active user is None"
+    track(
+        active_user,
+        category="dbt",
+        action="runnable_timing",
+        label=get_invocation_id(),
+        context=context,
+    )
+
+
 def flush():
     fire_event(FlushEvents())
     try:
@@ -439,7 +453,7 @@ def initialize_tracking(cookie_dir):
     try:
         active_user.initialize()
     except Exception:
-        fire_event(TrackingInitializeFailure())
+        fire_event(TrackingInitializeFailure(exc_info=traceback.format_exc()))
         active_user = User(None)
 
 

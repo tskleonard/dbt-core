@@ -17,7 +17,7 @@ from pathlib import PosixPath, WindowsPath
 from contextlib import contextmanager
 from dbt.exceptions import ConnectionException
 from dbt.events.functions import fire_event
-from dbt.events.types import RetryExternalCall
+from dbt.events.types import RetryExternalCall, RecordRetryException
 from dbt import flags
 from enum import Enum
 from typing_extensions import Protocol
@@ -211,7 +211,7 @@ def deep_map_render(func: Callable[[Any, Tuple[Union[str, int], ...]], Any], val
 
     It maps the function func() onto each non-container value in 'value'
     recursively, returning a new value. As long as func does not manipulate
-    value, then deep_map_render will also not manipulate it.
+    the value, then deep_map_render will also not manipulate it.
 
     value should be a value returned by `yaml.safe_load` or `json.load` - the
     only expected types are list, dict, native python number, str, NoneType,
@@ -261,7 +261,7 @@ def get_hash(model):
 
 
 def get_hashed_contents(model):
-    return hashlib.md5(model.raw_sql.encode("utf-8")).hexdigest()
+    return hashlib.md5(model.raw_code.encode("utf-8")).hexdigest()
 
 
 def flatten_nodes(dep_list):
@@ -317,9 +317,16 @@ def timestring() -> str:
     return datetime.datetime.utcnow().isoformat() + "Z"
 
 
+def humanize_execution_time(execution_time: int) -> str:
+    minutes, seconds = divmod(execution_time, 60)
+    hours, minutes = divmod(minutes, 60)
+
+    return f" in {int(hours)} hours {int(minutes)} minutes and {seconds:0.2f} seconds"
+
+
 class JSONEncoder(json.JSONEncoder):
     """A 'custom' json encoder that does normal json encoder things, but also
-    handles `Decimal`s. and `Undefined`s. Decimals can lose precision because
+    handles `Decimal`s and `Undefined`s. Decimals can lose precision because
     they get converted to floats. Undefined's are serialized to an empty string
     """
 
@@ -394,7 +401,7 @@ def translate_aliases(
 
     If recurse is True, perform this operation recursively.
 
-    :return: A dict containing all the values in kwargs referenced by their
+    :returns: A dict containing all the values in kwargs referenced by their
         canonical key.
     :raises: `AliasException`, if a canonical key is defined more than once.
     """
@@ -484,11 +491,11 @@ class SingleThreadedExecutor(ConnectingExecutor):
             self, fn, *args = args
         elif not args:
             raise TypeError(
-                "descriptor 'submit' of 'SingleThreadedExecutor' object needs " "an argument"
+                "descriptor 'submit' of 'SingleThreadedExecutor' object needs an argument"
             )
         else:
             raise TypeError(
-                "submit expected at least 1 positional argument, " "got %d" % (len(args) - 1)
+                "submit expected at least 1 positional argument, got %d" % (len(args) - 1)
             )
         fut = concurrent.futures.Future()
         try:
@@ -600,22 +607,22 @@ class MultiDict(Mapping[str, Any]):
 
 def _connection_exception_retry(fn, max_attempts: int, attempt: int = 0):
     """Attempts to run a function that makes an external call, if the call fails
-    on a connection error, timeout or decompression issue, it will be tried up to 5 more times.
-    See https://github.com/dbt-labs/dbt-core/issues/4579 for context on this decompression issues
-    specifically.
+    on a Requests exception or decompression issue (ReadError), it will be tried
+    up to 5 more times.  All exceptions that Requests explicitly raises inherit from
+    requests.exceptions.RequestException.  See https://github.com/dbt-labs/dbt-core/issues/4579
+    for context on this decompression issues specifically.
     """
     try:
         return fn()
     except (
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        requests.exceptions.ContentDecodingError,
+        requests.exceptions.RequestException,
         ReadError,
     ) as exc:
         if attempt <= max_attempts - 1:
+            fire_event(RecordRetryException(exc=str(exc)))
             fire_event(RetryExternalCall(attempt=attempt, max=max_attempts))
             time.sleep(1)
-            _connection_exception_retry(fn, max_attempts, attempt + 1)
+            return _connection_exception_retry(fn, max_attempts, attempt + 1)
         else:
             raise ConnectionException("External connection exception occurred: " + str(exc))
 
@@ -659,3 +666,20 @@ def args_to_dict(args):
             var_args[key] = str(var_args[key])
         dict_args[key] = var_args[key]
     return dict_args
+
+
+# This is useful for proto generated classes in particular, since
+# the default for protobuf for strings is the empty string, so
+# Optional[str] types don't work for generated Python classes.
+def cast_to_str(string: Optional[str]) -> str:
+    if string is None:
+        return ""
+    else:
+        return string
+
+
+def cast_to_int(integer: Optional[int]) -> int:
+    if integer is None:
+        return 0
+    else:
+        return integer

@@ -6,11 +6,23 @@ ifeq ($(USE_DOCKER),true)
 	DOCKER_CMD := docker-compose run --rm test
 endif
 
+LOGS_DIR := ./logs
+
+# Optional flag to invoke tests using our CI env.
+# But we always want these active for structured
+# log testing.
+CI_FLAGS =\
+	DBT_TEST_USER_1=dbt_test_user_1\
+	DBT_TEST_USER_2=dbt_test_user_2\
+	DBT_TEST_USER_3=dbt_test_user_3\
+	RUSTFLAGS="-D warnings"\
+	LOG_DIR=./logs\
+	DBT_LOG_FORMAT=json
+
 .PHONY: dev
 dev: ## Installs dbt-* packages in develop mode along with development dependencies.
 	@\
-	pip install -r dev-requirements.txt -r editable-requirements.txt && \
-	pre-commit install
+	pip install -r dev-requirements.txt -r editable-requirements.txt
 
 .PHONY: mypy
 mypy: .env ## Runs mypy against staged changes for static type checking.
@@ -34,33 +46,34 @@ lint: .env ## Runs flake8 and mypy code checks against staged changes.
 	$(DOCKER_CMD) pre-commit run mypy-check --hook-stage manual | grep -v "INFO"
 
 .PHONY: unit
-unit: .env ## Runs unit tests with py38.
+unit: .env ## Runs unit tests with py
 	@\
-	$(DOCKER_CMD) tox -e py38
+	$(DOCKER_CMD) tox -e py
 
 .PHONY: test
-test: .env ## Runs unit tests with py38 and code checks against staged changes.
+test: .env ## Runs unit tests with py and code checks against staged changes.
 	@\
-	$(DOCKER_CMD) tox -p -e py38; \
+	$(DOCKER_CMD) tox -e py; \
 	$(DOCKER_CMD) pre-commit run black-check --hook-stage manual | grep -v "INFO"; \
 	$(DOCKER_CMD) pre-commit run flake8-check --hook-stage manual | grep -v "INFO"; \
 	$(DOCKER_CMD) pre-commit run mypy-check --hook-stage manual | grep -v "INFO"
 
 .PHONY: integration
-integration: .env integration-postgres ## Alias for integration-postgres.
+integration: .env ## Runs postgres integration tests with py-integration
+	@\
+	$(if $(USE_CI_FLAGS), $(CI_FLAGS)) $(DOCKER_CMD) tox -e py-integration -- -nauto
 
 .PHONY: integration-fail-fast
-integration-fail-fast: .env integration-postgres-fail-fast ## Alias for integration-postgres-fail-fast.
-
-.PHONY: integration-postgres
-integration-postgres: .env ## Runs postgres integration tests with py38.
+integration-fail-fast: .env ## Runs postgres integration tests with py-integration in "fail fast" mode.
 	@\
-	$(DOCKER_CMD) tox -e py38-postgres -- -nauto
+	$(DOCKER_CMD) tox -e py-integration -- -x -nauto
 
-.PHONY: integration-postgres-fail-fast
-integration-postgres-fail-fast: .env ## Runs postgres integration tests with py38 in "fail fast" mode.
+.PHONY: interop
+interop: clean
 	@\
-	$(DOCKER_CMD) tox -e py38-postgres -- -x -nauto
+	mkdir $(LOGS_DIR) && \
+	$(CI_FLAGS) $(DOCKER_CMD) tox -e py-integration -- -nauto && \
+	LOG_DIR=$(LOGS_DIR) cargo run --manifest-path test/interop/log_parsing/Cargo.toml
 
 .PHONY: setup-db
 setup-db: ## Setup Postgres database with docker-compose for system testing.
@@ -83,6 +96,7 @@ endif
 clean: ## Resets development environment.
 	@echo 'cleaning repo...'
 	@rm -f .coverage
+	@rm -f .coverage.*
 	@rm -rf .eggs/
 	@rm -f .env
 	@rm -rf .tox/

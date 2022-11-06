@@ -8,6 +8,7 @@ import tempfile
 import time
 import traceback
 import unittest
+import warnings
 from contextlib import contextmanager
 from datetime import datetime
 from functools import wraps
@@ -37,6 +38,9 @@ from dbt.contracts.graph.manifest import Manifest
 
 INITIAL_ROOT = os.getcwd()
 
+# Ensure dbt interal flags have been set from env vars.
+flags.set_from_args({}, {})
+
 
 def normalize(path):
     """On windows, neither is enough on its own:
@@ -63,20 +67,6 @@ class Normalized:
 
     def __eq__(self, other):
         return normalize(self.value) == normalize(other)
-
-
-class FakeArgs:
-    def __init__(self):
-        self.threads = 1
-        self.defer = False
-        self.full_refresh = False
-        self.models = None
-        self.select = None
-        self.exclude = None
-        self.single_threaded = False
-        self.selector_name = None
-        self.state = None
-        self.defer = None
 
 
 class TestArgs:
@@ -310,6 +300,13 @@ class DBTIntegrationTest(unittest.TestCase):
         return normalize(tempfile.mkdtemp(prefix='dbt-int-test-'))
 
     def setUp(self):
+        # Logbook warnings are ignored so we don't have to fork logbook to support python 3.10.
+        # This _only_ works for tests in `test/integration`.
+        warnings.filterwarnings(
+            "ignore",
+            category=DeprecationWarning,
+            module="logbook"
+        )
         self.dbt_core_install_root = os.path.dirname(dbt.__file__)
         log_manager.reset_handlers()
         self.initial_dir = INITIAL_ROOT

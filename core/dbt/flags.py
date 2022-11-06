@@ -10,7 +10,13 @@ from typing import Optional
 # PROFILES_DIR must be set before the other flags
 # It also gets set in main.py and in set_from_args because the rpc server
 # doesn't go through exactly the same main arg processing.
-DEFAULT_PROFILES_DIR = os.path.join(os.path.expanduser("~"), ".dbt")
+GLOBAL_PROFILES_DIR = os.path.join(os.path.expanduser("~"), ".dbt")
+LOCAL_PROFILES_DIR = os.getcwd()
+# Use the current working directory if there is a profiles.yml file present there
+if os.path.exists(Path(LOCAL_PROFILES_DIR) / Path("profiles.yml")):
+    DEFAULT_PROFILES_DIR = LOCAL_PROFILES_DIR
+else:
+    DEFAULT_PROFILES_DIR = GLOBAL_PROFILES_DIR
 PROFILES_DIR = os.path.expanduser(os.getenv("DBT_PROFILES_DIR", DEFAULT_PROFILES_DIR))
 
 STRICT_MODE = False  # Only here for backwards compatibility
@@ -35,6 +41,23 @@ INDIRECT_SELECTION = None
 LOG_CACHE_EVENTS = None
 EVENT_BUFFER_SIZE = 100000
 QUIET = None
+NO_PRINT = None
+CACHE_SELECTED_ONLY = None
+TARGET_PATH = None
+LOG_PATH = None
+
+_NON_BOOLEAN_FLAGS = [
+    "LOG_FORMAT",
+    "PRINTER_WIDTH",
+    "PROFILES_DIR",
+    "INDIRECT_SELECTION",
+    "EVENT_BUFFER_SIZE",
+    "TARGET_PATH",
+    "LOG_PATH",
+]
+
+_NON_DBT_ENV_FLAGS = ["DO_NOT_TRACK"]
+
 
 # Global CLI defaults. These flags are set from three places:
 # CLI args, environment variables, and user_config (profiles.yml).
@@ -57,11 +80,15 @@ flag_defaults = {
     "LOG_CACHE_EVENTS": False,
     "EVENT_BUFFER_SIZE": 100000,
     "QUIET": False,
+    "NO_PRINT": False,
+    "CACHE_SELECTED_ONLY": False,
+    "TARGET_PATH": None,
+    "LOG_PATH": None,
 }
 
 
 def env_set_truthy(key: str) -> Optional[str]:
-    """Return the value if it was set to a "truthy" string value, or None
+    """Return the value if it was set to a "truthy" string value or None
     otherwise.
     """
     value = os.getenv(key)
@@ -106,7 +133,8 @@ def set_from_args(args, user_config):
     global STRICT_MODE, FULL_REFRESH, WARN_ERROR, USE_EXPERIMENTAL_PARSER, STATIC_PARSER
     global WRITE_JSON, PARTIAL_PARSE, USE_COLORS, STORE_FAILURES, PROFILES_DIR, DEBUG, LOG_FORMAT
     global INDIRECT_SELECTION, VERSION_CHECK, FAIL_FAST, SEND_ANONYMOUS_USAGE_STATS
-    global PRINTER_WIDTH, WHICH, LOG_CACHE_EVENTS, EVENT_BUFFER_SIZE, QUIET
+    global PRINTER_WIDTH, WHICH, LOG_CACHE_EVENTS, EVENT_BUFFER_SIZE, QUIET, NO_PRINT, CACHE_SELECTED_ONLY
+    global TARGET_PATH, LOG_PATH
 
     STRICT_MODE = False  # backwards compatibility
     # cli args without user_config or env var option
@@ -132,38 +160,69 @@ def set_from_args(args, user_config):
     LOG_CACHE_EVENTS = get_flag_value("LOG_CACHE_EVENTS", args, user_config)
     EVENT_BUFFER_SIZE = get_flag_value("EVENT_BUFFER_SIZE", args, user_config)
     QUIET = get_flag_value("QUIET", args, user_config)
+    NO_PRINT = get_flag_value("NO_PRINT", args, user_config)
+    CACHE_SELECTED_ONLY = get_flag_value("CACHE_SELECTED_ONLY", args, user_config)
+    TARGET_PATH = get_flag_value("TARGET_PATH", args, user_config)
+    LOG_PATH = get_flag_value("LOG_PATH", args, user_config)
+
+    _set_overrides_from_env()
+
+
+def _set_overrides_from_env():
+    global SEND_ANONYMOUS_USAGE_STATS
+
+    flag_value = _get_flag_value_from_env("DO_NOT_TRACK")
+    if flag_value is None:
+        return
+
+    SEND_ANONYMOUS_USAGE_STATS = not flag_value
 
 
 def get_flag_value(flag, args, user_config):
-    lc_flag = flag.lower()
-    flag_value = getattr(args, lc_flag, None)
-    if flag_value is None:
-        # Environment variables use pattern 'DBT_{flag name}'
-        env_flag = f"DBT_{flag}"
-        env_value = os.getenv(env_flag)
-        if env_value is not None and env_value != "":
-            env_value = env_value.lower()
-            # non Boolean values
-            if flag in [
-                "LOG_FORMAT",
-                "PRINTER_WIDTH",
-                "PROFILES_DIR",
-                "INDIRECT_SELECTION",
-                "EVENT_BUFFER_SIZE",
-            ]:
-                flag_value = env_value
-            else:
-                flag_value = env_set_bool(env_value)
-        elif user_config is not None and getattr(user_config, lc_flag, None) is not None:
-            flag_value = getattr(user_config, lc_flag)
-        else:
-            flag_value = flag_defaults[flag]
+    flag_value = _load_flag_value(flag, args, user_config)
+
     if flag in ["PRINTER_WIDTH", "EVENT_BUFFER_SIZE"]:  # must be ints
         flag_value = int(flag_value)
     if flag == "PROFILES_DIR":
         flag_value = os.path.abspath(flag_value)
 
     return flag_value
+
+
+def _load_flag_value(flag, args, user_config):
+    lc_flag = flag.lower()
+    flag_value = getattr(args, lc_flag, None)
+    if flag_value is not None:
+        return flag_value
+
+    flag_value = _get_flag_value_from_env(flag)
+    if flag_value is not None:
+        return flag_value
+
+    if user_config is not None and getattr(user_config, lc_flag, None) is not None:
+        return getattr(user_config, lc_flag)
+
+    return flag_defaults[flag]
+
+
+def _get_flag_value_from_env(flag):
+    # Environment variables use pattern 'DBT_{flag name}'
+    env_flag = _get_env_flag(flag)
+    env_value = os.getenv(env_flag)
+    if env_value is None or env_value == "":
+        return None
+
+    env_value = env_value.lower()
+    if flag in _NON_BOOLEAN_FLAGS:
+        flag_value = env_value
+    else:
+        flag_value = env_set_bool(env_value)
+
+    return flag_value
+
+
+def _get_env_flag(flag):
+    return flag if flag in _NON_DBT_ENV_FLAGS else f"DBT_{flag}"
 
 
 def get_flag_dict():
@@ -185,4 +244,5 @@ def get_flag_dict():
         "log_cache_events": LOG_CACHE_EVENTS,
         "event_buffer_size": EVENT_BUFFER_SIZE,
         "quiet": QUIET,
+        "no_print": NO_PRINT,
     }

@@ -7,6 +7,7 @@ from dbt.events.functions import fire_event
 from dbt.events.types import (
     EmptyLine,
     RunResultWarning,
+    RunResultWarningMessage,
     RunResultFailure,
     StatsLine,
     RunResultError,
@@ -99,7 +100,10 @@ def print_run_result_error(result, newline: bool = True, is_warning: bool = Fals
             )
 
         if result.message:
-            fire_event(RunResultError(msg=result.message))
+            if is_warning:
+                fire_event(RunResultWarningMessage(msg=result.message))
+            else:
+                fire_event(RunResultError(msg=result.message))
         else:
             fire_event(RunResultErrorNoMessage(status=result.status))
 
@@ -116,6 +120,8 @@ def print_run_result_error(result, newline: bool = True, is_warning: bool = Fals
     elif result.message is not None:
         first = True
         for line in result.message.split("\n"):
+            # TODO: why do we format like this?  Is there a reason this needs to
+            # be split instead of sending it as a single log line?
             if first:
                 fire_event(FirstRunResultError(msg=line))
                 first = False

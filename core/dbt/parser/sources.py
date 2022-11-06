@@ -1,6 +1,6 @@
 import itertools
 from pathlib import Path
-from typing import Iterable, Dict, Optional, Set, List, Any
+from typing import Iterable, Dict, Optional, Set, Any, List
 from dbt.adapters.factory import get_adapter
 from dbt.config import RuntimeConfig
 from dbt.context.context_config import (
@@ -24,11 +24,12 @@ from dbt.contracts.graph.unparsed import (
     UnparsedColumn,
     Time,
 )
-from dbt.exceptions import warn_or_error, InternalException
+from dbt.events.functions import warn_or_error
+from dbt.events.types import UnusedTables
+from dbt.exceptions import InternalException
 from dbt.node_types import NodeType
 
 from dbt.parser.schemas import SchemaParser, ParserRef
-from dbt import ui
 
 
 # An UnparsedSourceDefinition is taken directly from the yaml
@@ -137,20 +138,20 @@ class SourcePatcher:
         tags = sorted(set(itertools.chain(source.tags, table.tags)))
 
         config = self._generate_source_config(
-            fqn=target.fqn,
+            target=target,
             rendered=True,
-            project_name=target.package_name,
         )
 
+        config = config.finalize_and_validate()
+
         unrendered_config = self._generate_source_config(
-            fqn=target.fqn,
+            target=target,
             rendered=False,
-            project_name=target.package_name,
         )
 
         if not isinstance(config, SourceConfig):
             raise InternalException(
-                f"Calculated a {type(config)} for a source, but expected " f"a SourceConfig"
+                f"Calculated a {type(config)} for a source, but expected a SourceConfig"
             )
 
         default_database = self.root_project.credentials.database
@@ -160,7 +161,6 @@ class SourcePatcher:
             database=(source.database or default_database),
             schema=(source.schema or source.name),
             identifier=(table.identifier or table.name),
-            root_path=target.root_path,
             path=target.path,
             original_file_path=target.original_file_path,
             columns=refs.column_info,
@@ -261,19 +261,29 @@ class SourcePatcher:
         )
         return node
 
-    def _generate_source_config(self, fqn: List[str], rendered: bool, project_name: str):
+    def _generate_source_config(self, target: UnpatchedSourceDefinition, rendered: bool):
         generator: BaseContextConfigGenerator
         if rendered:
             generator = ContextConfigGenerator(self.root_project)
         else:
             generator = UnrenderedConfigGenerator(self.root_project)
 
+        # configs with precendence set
+        precedence_configs = dict()
+        # first apply source configs
+        precedence_configs.update(target.source.config)
+        # then overrite anything that is defined on source tables
+        # this is not quite complex enough for configs that can be set as top-level node keys, but
+        # it works while source configs can only include `enabled`.
+        precedence_configs.update(target.table.config)
+
         return generator.calculate_node_config(
             config_call_dict={},
-            fqn=fqn,
+            fqn=target.fqn,
             resource_type=NodeType.Source,
-            project_name=project_name,
+            project_name=target.package_name,
             base=False,
+            patch_config_dict=precedence_configs,
         )
 
     def _get_relation_name(self, node: ParsedSourceDefinition):
@@ -297,28 +307,27 @@ class SourcePatcher:
                     unused_tables[key] = unused
 
         if unused_tables:
-            msg = self.get_unused_msg(unused_tables)
-            warn_or_error(msg, log_fmt=ui.warning_tag("{}"))
+            unused_tables_formatted = self.get_unused_msg(unused_tables)
+            warn_or_error(UnusedTables(unused_tables=unused_tables_formatted))
 
         self.manifest.source_patches = {}
 
     def get_unused_msg(
         self,
         unused_tables: Dict[SourceKey, Optional[Set[str]]],
-    ) -> str:
-        msg = [
-            "During parsing, dbt encountered source overrides that had no " "target:",
-        ]
+    ) -> List:
+        unused_tables_formatted = []
         for key, table_names in unused_tables.items():
             patch = self.manifest.source_patches[key]
             patch_name = f"{patch.overrides}.{patch.name}"
             if table_names is None:
-                msg.append(f"  - Source {patch_name} (in {patch.path})")
+                unused_tables_formatted.append(f"  - Source {patch_name} (in {patch.path})")
             else:
                 for table_name in sorted(table_names):
-                    msg.append(f"  - Source table {patch_name}.{table_name} " f"(in {patch.path})")
-        msg.append("")
-        return "\n".join(msg)
+                    unused_tables_formatted.append(
+                        f"  - Source table {patch_name}.{table_name} " f"(in {patch.path})"
+                    )
+        return unused_tables_formatted
 
 
 def merge_freshness_time_thresholds(

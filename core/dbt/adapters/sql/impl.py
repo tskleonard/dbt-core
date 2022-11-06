@@ -5,7 +5,7 @@ import dbt.clients.agate_helper
 from dbt.contracts.connection import Connection
 import dbt.exceptions
 from dbt.adapters.base import BaseAdapter, available
-from dbt.adapters.cache import _make_key
+from dbt.adapters.cache import _make_ref_key_msg
 from dbt.adapters.sql import SQLConnectionManager
 from dbt.events.functions import fire_event
 from dbt.events.types import ColTypeChange, SchemaCreation, SchemaDrop
@@ -27,7 +27,7 @@ ALTER_COLUMN_TYPE_MACRO_NAME = "alter_column_type"
 
 class SQLAdapter(BaseAdapter):
     """The default adapter with the common agate conversions and some SQL
-    methods implemented. This adapter has a different much shorter list of
+    methods was implemented. This adapter has a different much shorter list of
     methods to implement, but some more macros that must be implemented.
 
     To implement a macro, implement "${adapter_type}__${macro_name}". in the
@@ -110,7 +110,7 @@ class SQLAdapter(BaseAdapter):
                     ColTypeChange(
                         orig_type=target_column.data_type,
                         new_type=new_type,
-                        table=_make_key(current),
+                        table=_make_ref_key_msg(current),
                     )
                 )
 
@@ -155,7 +155,7 @@ class SQLAdapter(BaseAdapter):
 
     def create_schema(self, relation: BaseRelation) -> None:
         relation = relation.without_identifier()
-        fire_event(SchemaCreation(relation=_make_key(relation)))
+        fire_event(SchemaCreation(relation=_make_ref_key_msg(relation)))
         kwargs = {
             "relation": relation,
         }
@@ -166,11 +166,12 @@ class SQLAdapter(BaseAdapter):
 
     def drop_schema(self, relation: BaseRelation) -> None:
         relation = relation.without_identifier()
-        fire_event(SchemaDrop(relation=_make_key(relation)))
+        fire_event(SchemaDrop(relation=_make_ref_key_msg(relation)))
         kwargs = {
             "relation": relation,
         }
         self.execute_macro(DROP_SCHEMA_MACRO_NAME, kwargs=kwargs)
+        self.commit_if_has_connection()
         # we can update the cache here
         self.cache.drop_schema(relation.database, relation.schema)
 
@@ -218,3 +219,25 @@ class SQLAdapter(BaseAdapter):
         kwargs = {"information_schema": information_schema, "schema": schema}
         results = self.execute_macro(CHECK_SCHEMA_EXISTS_MACRO_NAME, kwargs=kwargs)
         return results[0][0] > 0
+
+    # This is for use in the test suite
+    def run_sql_for_tests(self, sql, fetch, conn):
+        cursor = conn.handle.cursor()
+        try:
+            cursor.execute(sql)
+            if hasattr(conn.handle, "commit"):
+                conn.handle.commit()
+            if fetch == "one":
+                return cursor.fetchone()
+            elif fetch == "all":
+                return cursor.fetchall()
+            else:
+                return
+        except BaseException as e:
+            if conn.handle and not getattr(conn.handle, "closed", True):
+                conn.handle.rollback()
+            print(sql)
+            print(e)
+            raise
+        finally:
+            conn.transaction_open = False

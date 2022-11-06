@@ -95,11 +95,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.view',
                     fqn=['root', 'view'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=self.model_config,
                     path='view.sql',
                     original_file_path='view.sql',
-                    raw_sql='with cte as (select * from something_else) select * from {{ref("ephemeral")}}',
+                    language='sql',
+                    raw_code='with cte as (select * from something_else) select * from {{ref("ephemeral")}}',
                     checksum=FileHash.from_contents(''),
                 ),
                 'model.root.ephemeral': ParsedModelNode(
@@ -111,11 +111,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.ephemeral',
                     fqn=['root', 'ephemeral'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=ephemeral_config,
                     path='ephemeral.sql',
                     original_file_path='ephemeral.sql',
-                    raw_sql='select * from source_table',
+                    language='sql',
+                    raw_code='select * from source_table',
                     checksum=FileHash.from_contents(''),
                 ),
             },
@@ -135,7 +135,7 @@ class CompilerTest(unittest.TestCase):
         self.assertEqual(result, manifest.nodes['model.root.view'])
         self.assertEqual(result.extra_ctes_injected, True)
         self.assertEqualIgnoreWhitespace(
-            result.compiled_sql,
+            result.compiled_code,
             ('with __dbt__cte__ephemeral as ('
              'select * from source_table'
              '), cte as (select * from something_else) '
@@ -157,11 +157,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.view',
                     fqn=['root', 'view'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=self.model_config,
                     path='view.sql',
                     original_file_path='view.sql',
-                    raw_sql=('with cte as (select * from something_else) '
+                    language='sql',
+                    raw_code=('with cte as (select * from something_else) '
                              'select * from source_table'),
                     checksum=FileHash.from_contents(''),
                 ),
@@ -174,11 +174,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.view_no_cte',
                     fqn=['root', 'view_no_cte'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=self.model_config,
                     path='view.sql',
                     original_file_path='view.sql',
-                    raw_sql='select * from source_table',
+                    language='sql',
+                    raw_code='select * from source_table',
                     checksum=FileHash.from_contents(''),
                 ),
             },
@@ -200,7 +200,7 @@ class CompilerTest(unittest.TestCase):
             manifest.nodes.get('model.root.view'))
         self.assertTrue(result.extra_ctes_injected)
         self.assertEqualIgnoreWhitespace(
-            result.compiled_sql,
+            result.compiled_code,
             ('with cte as (select * from something_else) '
              'select * from source_table')
         )
@@ -214,7 +214,7 @@ class CompilerTest(unittest.TestCase):
             manifest.nodes.get('model.root.view_no_cte'))
         self.assertTrue(result.extra_ctes_injected)
         self.assertEqualIgnoreWhitespace(
-            result.compiled_sql,
+            result.compiled_code,
             'select * from source_table'
         )
 
@@ -233,11 +233,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.view',
                     fqn=['root', 'view'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=self.model_config,
                     path='view.sql',
                     original_file_path='view.sql',
-                    raw_sql='select * from {{ref("ephemeral")}}',
+                    language='sql',
+                    raw_code='select * from {{ref("ephemeral")}}',
                     checksum=FileHash.from_contents(''),
                 ),
                 'model.root.ephemeral': ParsedModelNode(
@@ -249,11 +249,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.ephemeral',
                     fqn=['root', 'ephemeral'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=ephemeral_config,
                     path='ephemeral.sql',
                     original_file_path='ephemeral.sql',
-                    raw_sql='select * from source_table',
+                    language='sql',
+                    raw_code='select * from source_table',
                     checksum=FileHash.from_contents(''),
                 ),
             },
@@ -274,7 +274,7 @@ class CompilerTest(unittest.TestCase):
         )
         self.assertTrue(result.extra_ctes_injected)
         self.assertEqualIgnoreWhitespace(
-            result.compiled_sql,
+            result.compiled_code,
             ('with __dbt__cte__ephemeral as ('
              'select * from source_table'
              ') '
@@ -293,7 +293,6 @@ class CompilerTest(unittest.TestCase):
             unique_id='model.root.ephemeral',
             fqn=['root', 'ephemeral'],
             package_name='root',
-            root_path='/usr/src/app',
             refs=[],
             sources=[],
             depends_on=DependsOn(),
@@ -301,7 +300,8 @@ class CompilerTest(unittest.TestCase):
             tags=[],
             path='ephemeral.sql',
             original_file_path='ephemeral.sql',
-            raw_sql='select * from source_table',
+            language='sql',
+            raw_code='select * from source_table',
             checksum=FileHash.from_contents(''),
         )
         compiled_ephemeral = CompiledModelNode(
@@ -313,7 +313,6 @@ class CompilerTest(unittest.TestCase):
             unique_id='model.root.ephemeral',
             fqn=['root', 'ephemeral'],
             package_name='root',
-            root_path='/usr/src/app',
             refs=[],
             sources=[],
             depends_on=DependsOn(),
@@ -321,9 +320,10 @@ class CompilerTest(unittest.TestCase):
             tags=[],
             path='ephemeral.sql',
             original_file_path='ephemeral.sql',
-            raw_sql='select * from source_table',
+            language='sql',
+            raw_code='select * from source_table',
             compiled=True,
-            compiled_sql='select * from source_table',
+            compiled_code='select * from source_table',
             extra_ctes_injected=True,
             extra_ctes=[],
             checksum=FileHash.from_contents(''),
@@ -340,7 +340,6 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.view',
                     fqn=['root', 'view'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     refs=[],
                     sources=[],
                     depends_on=DependsOn(nodes=['model.root.ephemeral']),
@@ -348,12 +347,13 @@ class CompilerTest(unittest.TestCase):
                     tags=[],
                     path='view.sql',
                     original_file_path='view.sql',
-                    raw_sql='select * from {{ref("ephemeral")}}',
+                    language='sql',
+                    raw_code='select * from {{ref("ephemeral")}}',
                     compiled=True,
                     extra_ctes_injected=False,
                     extra_ctes=[InjectedCTE(
                         id='model.root.ephemeral', sql='select * from source_table')],
-                    compiled_sql='select * from __dbt__cte__ephemeral',
+                    compiled_code='select * from __dbt__cte__ephemeral',
                     checksum=FileHash.from_contents(''),
                 ),
                 'model.root.ephemeral': parsed_ephemeral,
@@ -385,7 +385,7 @@ class CompilerTest(unittest.TestCase):
         self.assertTrue(manifest.nodes['model.root.ephemeral'].compiled)
         self.assertTrue(result.extra_ctes_injected)
         self.assertEqualIgnoreWhitespace(
-            result.compiled_sql,
+            result.compiled_code,
             ('with __dbt__cte__ephemeral as ('
              'select * from source_table'
              ') '
@@ -409,11 +409,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.view',
                     fqn=['root', 'view'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=self.model_config,
                     path='view.sql',
                     original_file_path='view.sql',
-                    raw_sql='select * from {{ref("ephemeral")}}',
+                    language='sql',
+                    raw_code='select * from {{ref("ephemeral")}}',
                     checksum=FileHash.from_contents(''),
 
                 ),
@@ -426,11 +426,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.ephemeral',
                     fqn=['root', 'ephemeral'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=ephemeral_config,
                     path='ephemeral.sql',
                     original_file_path='ephemeral.sql',
-                    raw_sql='select * from {{ref("ephemeral_level_two")}}',
+                    language='sql',
+                    raw_code='select * from {{ref("ephemeral_level_two")}}',
                     checksum=FileHash.from_contents(''),
                 ),
                 'model.root.ephemeral_level_two': ParsedModelNode(
@@ -442,11 +442,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.ephemeral_level_two',
                     fqn=['root', 'ephemeral_level_two'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=ephemeral_config,
                     path='ephemeral_level_two.sql',
                     original_file_path='ephemeral_level_two.sql',
-                    raw_sql='select * from source_table',
+                    language='sql',
+                    raw_code='select * from source_table',
                     checksum=FileHash.from_contents(''),
                 ),
             },
@@ -465,7 +465,7 @@ class CompilerTest(unittest.TestCase):
         self.assertEqual(result, manifest.nodes['model.root.view'])
         self.assertTrue(result.extra_ctes_injected)
         self.assertEqualIgnoreWhitespace(
-            result.compiled_sql,
+            result.compiled_code,
             ('with __dbt__cte__ephemeral_level_two as ('
              'select * from source_table'
              '), __dbt__cte__ephemeral as ('
@@ -497,11 +497,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.view',
                     fqn=['root', 'view'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=self.model_config,
                     path='view.sql',
                     original_file_path='view.sql',
-                    raw_sql='select * from {{ref("ephemeral")}}',
+                    language='sql',
+                    raw_code='select * from {{ref("ephemeral")}}',
                     checksum=FileHash.from_contents(''),
                 ),
                 'model.root.inner_ephemeral': ParsedModelNode(
@@ -513,11 +513,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.inner_ephemeral',
                     fqn=['root', 'inner_ephemeral'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=ephemeral_config,
                     path='inner_ephemeral.sql',
                     original_file_path='inner_ephemeral.sql',
-                    raw_sql='select * from source_table',
+                    language='sql',
+                    raw_code='select * from source_table',
                     checksum=FileHash.from_contents(''),
                 ),
                  'model.root.ephemeral': ParsedModelNode(
@@ -529,11 +529,11 @@ class CompilerTest(unittest.TestCase):
                     unique_id='model.root.ephemeral',
                     fqn=['root', 'ephemeral'],
                     package_name='root',
-                    root_path='/usr/src/app',
                     config=ephemeral_config,
                     path='ephemeral.sql',
                     original_file_path='ephemeral.sql',
-                    raw_sql='select * from {{ ref("inner_ephemeral") }}',
+                    language='sql',
+                    raw_code='select * from {{ ref("inner_ephemeral") }}',
                     checksum=FileHash.from_contents(''),
                 ),
             },
@@ -553,7 +553,7 @@ class CompilerTest(unittest.TestCase):
             write=False
         )
         self.assertEqualIgnoreWhitespace(
-            result.compiled_sql,
+            result.compiled_code,
             ('with __dbt__cte__inner_ephemeral as ('
              'select * from source_table'
              '), '
@@ -562,7 +562,7 @@ class CompilerTest(unittest.TestCase):
              ') '
              'select * from __dbt__cte__ephemeral'))
         self.assertEqualIgnoreWhitespace(
-            manifest.nodes['model.root.ephemeral'].compiled_sql,
+            manifest.nodes['model.root.ephemeral'].compiled_code,
             ('with __dbt__cte__inner_ephemeral as ('
             'select * from source_table'
             ')  '

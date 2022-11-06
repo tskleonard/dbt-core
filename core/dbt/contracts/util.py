@@ -1,13 +1,24 @@
 import dataclasses
-import os
 from datetime import datetime
 from typing import List, Tuple, ClassVar, Type, TypeVar, Dict, Any, Optional
 
 from dbt.clients.system import write_json, read_json
-from dbt.exceptions import InternalException, RuntimeException, IncompatibleSchemaException
+from dbt import deprecations
+from dbt.exceptions import (
+    InternalException,
+    RuntimeException,
+    IncompatibleSchemaException,
+)
 from dbt.version import __version__
-from dbt.events.functions import get_invocation_id
+from dbt.events.functions import get_invocation_id, get_metadata_vars
 from dbt.dataclass_schema import dbtClassMixin
+
+from dbt.dataclass_schema import (
+    ValidatedStringMixin,
+    ValidationError,
+    register_pattern,
+)
+
 
 SourceKey = Tuple[str, str]
 
@@ -136,20 +147,6 @@ class SchemaVersion:
         return BASE_SCHEMAS_URL + self.path
 
 
-SCHEMA_VERSION_KEY = "dbt_schema_version"
-
-
-METADATA_ENV_PREFIX = "DBT_ENV_CUSTOM_ENV_"
-
-
-def get_metadata_env() -> Dict[str, str]:
-    return {
-        k[len(METADATA_ENV_PREFIX) :]: v
-        for k, v in os.environ.items()
-        if k.startswith(METADATA_ENV_PREFIX)
-    }
-
-
 # This is used in the ManifestMetadata, RunResultsMetadata, RunOperationResultMetadata,
 # FreshnessMetadata, and CatalogMetadata classes
 @dataclasses.dataclass
@@ -158,7 +155,7 @@ class BaseArtifactMetadata(dbtClassMixin):
     dbt_version: str = __version__
     generated_at: datetime = dataclasses.field(default_factory=datetime.utcnow)
     invocation_id: Optional[str] = dataclasses.field(default_factory=get_invocation_id)
-    env: Dict[str, str] = dataclasses.field(default_factory=get_metadata_env)
+    env: Dict[str, str] = dataclasses.field(default_factory=get_metadata_vars)
 
     def __post_serialize__(self, dct):
         dct = super().__post_serialize__(dct)
@@ -189,6 +186,89 @@ def schema_version(name: str, version: int):
     return inner
 
 
+def get_manifest_schema_version(dct: dict) -> int:
+    schema_version = dct.get("metadata", {}).get("dbt_schema_version", None)
+    if not schema_version:
+        raise ValueError("Manifest doesn't have schema version")
+    return int(schema_version.split(".")[-2][-1])
+
+
+# we renamed these properties in v1.3
+# this method allows us to be nice to the early adopters
+def rename_metric_attr(data: dict, raise_deprecation_warning: bool = False) -> dict:
+    metric_name = data["name"]
+    if raise_deprecation_warning and (
+        "sql" in data.keys()
+        or "type" in data.keys()
+        or data.get("calculation_method") == "expression"
+    ):
+        deprecations.warn("metric-attr-renamed", metric_name=metric_name)
+    duplicated_attribute_msg = """\n
+The metric '{}' contains both the deprecated metric property '{}'
+and the up-to-date metric property '{}'. Please remove the deprecated property.
+"""
+    if "sql" in data.keys():
+        if "expression" in data.keys():
+            raise ValidationError(
+                duplicated_attribute_msg.format(metric_name, "sql", "expression")
+            )
+        else:
+            data["expression"] = data.pop("sql")
+    if "type" in data.keys():
+        if "calculation_method" in data.keys():
+            raise ValidationError(
+                duplicated_attribute_msg.format(metric_name, "type", "calculation_method")
+            )
+        else:
+            calculation_method = data.pop("type")
+            data["calculation_method"] = calculation_method
+    # we also changed "type: expression" -> "calculation_method: derived"
+    if data.get("calculation_method") == "expression":
+        data["calculation_method"] = "derived"
+    return data
+
+
+def rename_sql_attr(node_content: dict) -> dict:
+    if "raw_sql" in node_content:
+        node_content["raw_code"] = node_content.pop("raw_sql")
+    if "compiled_sql" in node_content:
+        node_content["compiled_code"] = node_content.pop("compiled_sql")
+    node_content["language"] = "sql"
+    return node_content
+
+
+def upgrade_manifest_json(manifest: dict) -> dict:
+    for node_content in manifest.get("nodes", {}).values():
+        node_content = rename_sql_attr(node_content)
+        if node_content["resource_type"] != "seed" and "root_path" in node_content:
+            del node_content["root_path"]
+    for disabled in manifest.get("disabled", {}).values():
+        # There can be multiple disabled nodes for the same unique_id
+        # so make sure all the nodes get the attr renamed
+        for node_content in disabled:
+            rename_sql_attr(node_content)
+            if node_content["resource_type"] != "seed" and "root_path" in node_content:
+                del node_content["root_path"]
+    for metric_content in manifest.get("metrics", {}).values():
+        # handle attr renames + value translation ("expression" -> "derived")
+        metric_content = rename_metric_attr(metric_content)
+        if "root_path" in metric_content:
+            del metric_content["root_path"]
+    for exposure_content in manifest.get("exposures", {}).values():
+        if "root_path" in exposure_content:
+            del exposure_content["root_path"]
+    for source_content in manifest.get("sources", {}).values():
+        if "root_path" in exposure_content:
+            del source_content["root_path"]
+    for macro_content in manifest.get("macros", {}).values():
+        if "root_path" in macro_content:
+            del macro_content["root_path"]
+    for doc_content in manifest.get("docs", {}).values():
+        if "root_path" in doc_content:
+            del doc_content["root_path"]
+    return manifest
+
+
 # This is used in the ArtifactMixin and RemoteResult classes
 @dataclasses.dataclass
 class VersionedSchema(dbtClassMixin):
@@ -200,6 +280,14 @@ class VersionedSchema(dbtClassMixin):
         if not embeddable:
             result["$id"] = str(cls.dbt_schema_version)
         return result
+
+    @classmethod
+    def is_compatible_version(cls, schema_version):
+        compatible_versions = [str(cls.dbt_schema_version)]
+        if hasattr(cls, "compatible_previous_versions"):
+            for name, version in cls.compatible_previous_versions():
+                compatible_versions.append(str(SchemaVersion(name, version)))
+        return str(schema_version) in compatible_versions
 
     @classmethod
     def read_and_check_versions(cls, path: str):
@@ -217,11 +305,13 @@ class VersionedSchema(dbtClassMixin):
             if "metadata" in data and "dbt_schema_version" in data["metadata"]:
                 previous_schema_version = data["metadata"]["dbt_schema_version"]
                 # cls.dbt_schema_version is a SchemaVersion object
-                if str(cls.dbt_schema_version) != previous_schema_version:
+                if not cls.is_compatible_version(previous_schema_version):
                     raise IncompatibleSchemaException(
-                        expected=str(cls.dbt_schema_version), found=previous_schema_version
+                        expected=str(cls.dbt_schema_version),
+                        found=previous_schema_version,
                     )
-
+        if get_manifest_schema_version(data) <= 7:
+            data = upgrade_manifest_json(data)
         return cls.from_dict(data)  # type: ignore
 
 
@@ -242,3 +332,22 @@ class ArtifactMixin(VersionedSchema, Writable, Readable):
         super().validate(data)
         if cls.dbt_schema_version is None:
             raise InternalException("Cannot call from_dict with no schema version!")
+
+
+class Identifier(ValidatedStringMixin):
+    ValidationRegex = r"^[^\d\W]\w*$"
+
+    @classmethod
+    def is_valid(cls, value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+
+        try:
+            cls.validate(value)
+        except ValidationError:
+            return False
+
+        return True
+
+
+register_pattern(Identifier, r"^[^\d\W]\w*$")

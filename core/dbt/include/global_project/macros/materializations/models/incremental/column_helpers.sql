@@ -41,12 +41,40 @@
   {% for sc in source_columns %}
     {% set tc = target_columns | selectattr("name", "equalto", sc.name) | list | first %}
     {% if tc %}
-      {% if sc.data_type != tc.data_type %}
+      {% if sc.data_type != tc.data_type and not sc.can_expand_to(other_column=tc) %}
         {{ result.append( { 'column_name': tc.name, 'new_type': sc.data_type } ) }}
       {% endif %}
     {% endif %}
   {% endfor %}
 
   {{ return(result) }}
+
+{% endmacro %}
+
+{% macro get_merge_update_columns(merge_update_columns, merge_exclude_columns, dest_columns) %}
+  {{ return(adapter.dispatch('get_merge_update_columns', 'dbt')(merge_update_columns, merge_exclude_columns, dest_columns)) }}
+{% endmacro %}
+
+{% macro default__get_merge_update_columns(merge_update_columns, merge_exclude_columns, dest_columns) %}
+  {%- set default_cols = dest_columns | map(attribute="quoted") | list -%}
+
+  {%- if merge_update_columns and merge_exclude_columns -%}
+    {{ exceptions.raise_compiler_error(
+        'Model cannot specify merge_update_columns and merge_exclude_columns. Please update model to use only one config'
+    )}}
+  {%- elif merge_update_columns -%}
+    {%- set update_columns = merge_update_columns -%}
+  {%- elif merge_exclude_columns -%}
+    {%- set update_columns = [] -%}
+    {%- for column in dest_columns -%}
+      {% if column.column | lower not in merge_exclude_columns | map("lower") | list %}
+        {%- do update_columns.append(column.quoted) -%}
+      {% endif %}
+    {%- endfor -%}
+  {%- else -%}
+    {%- set update_columns = default_cols -%}
+  {%- endif -%}
+
+  {{ return(update_columns) }}
 
 {% endmacro %}

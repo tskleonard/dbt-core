@@ -317,7 +317,7 @@ class TestProfile(BaseConfigTest):
             'model-paths': ['models'],
             'source-paths': ['other-models'],
         })
-        with self.assertRaises(dbt.exceptions.DbtProjectError) as exc:            
+        with self.assertRaises(dbt.exceptions.DbtProjectError) as exc:
             project = project_from_config_norender(self.default_project_data)
 
         self.assertIn('source-paths and model-paths', str(exc.exception))
@@ -602,7 +602,7 @@ class TestProject(BaseConfigTest):
         self.assertEqual(project.seed_paths, ['seeds'])
         self.assertEqual(project.test_paths, ['tests'])
         self.assertEqual(project.analysis_paths, ['analyses'])
-        self.assertEqual(project.docs_paths, ['models', 'seeds', 'snapshots', 'analyses', 'macros'])
+        self.assertEqual(set(project.docs_paths), set(['models', 'seeds', 'snapshots', 'analyses', 'macros']))
         self.assertEqual(project.asset_paths, [])
         self.assertEqual(project.target_path, 'target')
         self.assertEqual(project.clean_targets, ['target'])
@@ -635,7 +635,7 @@ class TestProject(BaseConfigTest):
             'target-path': 'other-target',
         })
         project = project_from_config_norender(self.default_project_data)
-        self.assertEqual(project.docs_paths, ['other-models', 'seeds', 'snapshots', 'analyses', 'macros'])
+        self.assertEqual(set(project.docs_paths), set(['other-models', 'seeds', 'snapshots', 'analyses', 'macros']))
         self.assertEqual(project.clean_targets, ['other-target'])
 
     def test_hashed_name(self):
@@ -1084,35 +1084,6 @@ class TestRuntimeConfig(BaseConfigTest):
         with self.assertRaises(dbt.exceptions.DbtProjectError):
             self.get_project()
 
-    def test__no_unused_resource_config_paths(self):
-        self.default_project_data.update({
-            'models': model_config,
-            'seeds': {},
-        })
-        project = self.from_parts()
-
-        resource_fqns = {'models': model_fqns}
-        unused = project.get_unused_resource_config_paths(resource_fqns, [])
-        self.assertEqual(len(unused), 0)
-
-    def test__unused_resource_config_paths(self):
-        self.default_project_data.update({
-            'models': model_config['my_package_name'],
-            'seeds': {},
-        })
-        project = self.from_parts()
-
-        resource_fqns = {'models': model_fqns}
-        unused = project.get_unused_resource_config_paths(resource_fqns, [])
-        self.assertEqual(len(unused), 3)
-
-    def test__get_unused_resource_config_paths_empty(self):
-        project = self.from_parts()
-        unused = project.get_unused_resource_config_paths({'models': frozenset((
-            ('my_test_project', 'foo', 'bar'),
-            ('my_test_project', 'foo', 'baz'),
-        ))}, [])
-        self.assertEqual(len(unused), 0)
 
     def test__warn_for_unused_resource_config_paths_empty(self):
         project = self.from_parts()
@@ -1172,26 +1143,17 @@ class TestRuntimeConfigWithConfigs(BaseConfigTest):
         else:
             return err
 
-    def test__get_unused_resource_config_paths(self):
-        project = self.from_parts()
-        unused = project.get_unused_resource_config_paths(self.used, [])
-        self.assertEqual(len(unused), 1)
-        self.assertEqual(unused[0], ('models', 'my_test_project', 'baz'))
 
-    @mock.patch.object(dbt.config.runtime, 'warn_or_error')
-    def test__warn_for_unused_resource_config_paths(self, warn_or_error):
+    def test__warn_for_unused_resource_config_paths(self):
         project = self.from_parts()
-        project.warn_for_unused_resource_config_paths(self.used, [])
-        warn_or_error.assert_called_once()
-
-    def test__warn_for_unused_resource_config_paths_disabled(self):
-        project = self.from_parts()
-        unused = project.get_unused_resource_config_paths(
-            self.used,
-            frozenset([('my_test_project', 'baz')])
-        )
-
-        self.assertEqual(len(unused), 0)
+        with mock.patch('dbt.config.runtime.warn_or_error') as warn_or_error_patch:
+            project.warn_for_unused_resource_config_paths(self.used, [])
+            warn_or_error_patch.assert_called_once()
+            event = warn_or_error_patch.call_args[0][0]
+            assert event.info.name == 'UnusedResourceConfigPath'
+            msg = event.info.msg
+            expected_msg = "- models.my_test_project.baz"
+            assert expected_msg in msg
 
 
 class TestRuntimeConfigFiles(BaseFileTest):
@@ -1215,7 +1177,7 @@ class TestRuntimeConfigFiles(BaseFileTest):
         self.assertEqual(config.seed_paths, ['seeds'])
         self.assertEqual(config.test_paths, ['tests'])
         self.assertEqual(config.analysis_paths, ['analyses'])
-        self.assertEqual(config.docs_paths, ['models', 'seeds', 'snapshots', 'analyses', 'macros'])
+        self.assertEqual(set(config.docs_paths), set(['models', 'seeds', 'snapshots', 'analyses', 'macros']))
         self.assertEqual(config.asset_paths, [])
         self.assertEqual(config.target_path, 'target')
         self.assertEqual(config.clean_targets, ['target'])
@@ -1228,6 +1190,45 @@ class TestRuntimeConfigFiles(BaseFileTest):
         self.assertEqual(config.seeds, {})
         self.assertEqual(config.packages, PackageConfig(packages=[]))
         self.assertEqual(config.project_name, 'my_test_project')
+
+
+class TestUnsetProfileConfig(BaseConfigTest):
+    def setUp(self):
+        self.profiles_dir = '/invalid-profiles-path'
+        self.project_dir = '/invalid-root-path'
+        super().setUp()
+        self.default_project_data['project-root'] = self.project_dir
+
+    def get_project(self):
+        return project_from_config_norender(self.default_project_data, verify_version=self.args.version_check)
+
+    def get_profile(self):
+        renderer = empty_profile_renderer()
+        return dbt.config.Profile.from_raw_profiles(
+            self.default_profile_data, self.default_project_data['profile'], renderer
+        )
+
+    def test_str(self):
+        project = self.get_project()
+        profile = self.get_profile()
+        config = dbt.config.UnsetProfileConfig.from_parts(project, profile, {})
+
+        str(config)
+
+    def test_repr(self):
+        project = self.get_project()
+        profile = self.get_profile()
+        config = dbt.config.UnsetProfileConfig.from_parts(project, profile, {})
+
+        repr(config)
+
+    def test_to_project_config(self):
+        project = self.get_project()
+        profile = self.get_profile()
+        config = dbt.config.UnsetProfileConfig.from_parts(project, profile, {})
+        project_config = config.to_project_config()
+
+        self.assertEqual(project_config["profile"], "")
 
 
 class TestVariableRuntimeConfigFiles(BaseFileTest):

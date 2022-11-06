@@ -21,13 +21,17 @@ from dbt.contracts.graph.unparsed import (
     UnparsedNodeUpdate,
     UnparsedExposure,
 )
-from dbt.exceptions import raise_compiler_error, raise_parsing_error
+from dbt.exceptions import raise_compiler_error, raise_parsing_error, UndefinedMacroException
 from dbt.parser.search import FileBlock
 
 
-def get_nice_generic_test_name(
+def synthesize_generic_test_names(
     test_type: str, test_name: str, args: Dict[str, Any]
 ) -> Tuple[str, str]:
+    # Using the type, name, and arguments to this generic test, synthesize a (hopefully) unique name
+    # Will not be unique if multiple tests have same name + arguments, and only configs differ
+    # Returns a shorter version (hashed/truncated, for the compiled file)
+    # as well as the full name (for the unique_id + FQN)
     flat_args = []
     for arg_name in sorted(args):
         # the model is already embedded in the name, so skip it
@@ -253,7 +257,28 @@ class TestBuilder(Generic[Testable]):
             if not value and "config" in self.args:
                 value = self.args["config"].pop(key, None)
             if isinstance(value, str):
-                value = get_rendered(value, render_ctx, native=True)
+
+                try:
+                    value = get_rendered(value, render_ctx, native=True)
+                except UndefinedMacroException as e:
+
+                    # Generic tests do not include custom macros in the Jinja
+                    # rendering context, so this will almost always fail. As it
+                    # currently stands, the error message is inscrutable, which
+                    # has caused issues for some projects migrating from
+                    # pre-0.20.0 to post-0.20.0.
+                    # See https://github.com/dbt-labs/dbt-core/issues/4103
+                    # and https://github.com/dbt-labs/dbt-core/issues/5294
+                    raise_compiler_error(
+                        f"The {self.target.name}.{column_name} column's "
+                        f'"{self.name}" test references an undefined '
+                        f"macro in its {key} configuration argument. "
+                        f"The macro {e.msg}.\n"
+                        "Please note that the generic test configuration parser "
+                        "currently does not support using custom macros to "
+                        "populate configuration values"
+                    )
+
             if value is not None:
                 self.config[key] = value
 
@@ -263,13 +288,25 @@ class TestBuilder(Generic[Testable]):
         if self.namespace is not None:
             self.package_name = self.namespace
 
-        compiled_name, fqn_name = self.get_test_name()
-        self.compiled_name: str = compiled_name
-        self.fqn_name: str = fqn_name
+        # If the user has provided a custom name for this generic test, use it
+        # Then delete the "name" argument to avoid passing it into the test macro
+        # Otherwise, use an auto-generated name synthesized from test inputs
+        self.compiled_name: str = ""
+        self.fqn_name: str = ""
 
-        # use hashed name as alias if too long
-        if compiled_name != fqn_name and "alias" not in self.config:
-            self.config["alias"] = compiled_name
+        if "name" in self.args:
+            # Assign the user-defined name here, which will be checked for uniqueness later
+            # we will raise an error if two tests have same name for same model + column combo
+            self.compiled_name = self.args["name"]
+            self.fqn_name = self.args["name"]
+            del self.args["name"]
+        else:
+            short_name, full_name = self.get_synthetic_test_names()
+            self.compiled_name = short_name
+            self.fqn_name = full_name
+            # use hashed name as alias if full name is too long
+            if short_name != full_name and "alias" not in self.config:
+                self.config["alias"] = short_name
 
     def _bad_type(self) -> TypeError:
         return TypeError('invalid target type "{}"'.format(type(self.target)))
@@ -281,13 +318,23 @@ class TestBuilder(Generic[Testable]):
                 "test must be dict or str, got {} (value {})".format(type(test), test)
             )
 
-        test = list(test.items())
-        if len(test) != 1:
-            raise_parsing_error(
-                "test definition dictionary must have exactly one key, got"
-                " {} instead ({} keys)".format(test, len(test))
-            )
-        test_name, test_args = test[0]
+        # If the test is a dictionary with top-level keys, the test name is "test_name"
+        # and the rest are arguments
+        # {'name': 'my_favorite_test', 'test_name': 'unique', 'config': {'where': '1=1'}}
+        if "test_name" in test.keys():
+            test_name = test.pop("test_name")
+            test_args = test
+        # If the test is a nested dictionary with one top-level key, the test name
+        # is the dict name, and nested keys are arguments
+        # {'unique': {'name': 'my_favorite_test', 'config': {'where': '1=1'}}}
+        else:
+            test = list(test.items())
+            if len(test) != 1:
+                raise_parsing_error(
+                    "test definition dictionary must have exactly one key, got"
+                    " {} instead ({} keys)".format(test, len(test))
+                )
+            test_name, test_args = test[0]
 
         if not isinstance(test_args, dict):
             raise_parsing_error(
@@ -388,7 +435,7 @@ class TestBuilder(Generic[Testable]):
             tags = [tags]
         if not isinstance(tags, list):
             raise_compiler_error(
-                f"got {tags} ({type(tags)}) for tags, expected a list of " f"strings"
+                f"got {tags} ({type(tags)}) for tags, expected a list of strings"
             )
         for tag in tags:
             if not isinstance(tag, str):
@@ -401,7 +448,8 @@ class TestBuilder(Generic[Testable]):
             macro_name = "{}.{}".format(self.namespace, macro_name)
         return macro_name
 
-    def get_test_name(self) -> Tuple[str, str]:
+    def get_synthetic_test_names(self) -> Tuple[str, str]:
+        # Returns two names: shorter (for the compiled file), full (for the unique_id + FQN)
         if isinstance(self.target, UnparsedNodeUpdate):
             name = self.name
         elif isinstance(self.target, UnpatchedSourceDefinition):
@@ -410,7 +458,7 @@ class TestBuilder(Generic[Testable]):
             raise self._bad_type()
         if self.namespace is not None:
             name = "{}_{}".format(self.namespace, name)
-        return get_nice_generic_test_name(name, self.target.name, self.args)
+        return synthesize_generic_test_names(name, self.target.name, self.args)
 
     def construct_config(self) -> str:
         configs = ",".join(
@@ -429,9 +477,9 @@ class TestBuilder(Generic[Testable]):
         else:
             return ""
 
-    # this is the 'raw_sql' that's used in 'render_update' and execution
+    # this is the 'raw_code' that's used in 'render_update' and execution
     # of the test macro
-    def build_raw_sql(self) -> str:
+    def build_raw_code(self) -> str:
         return ("{{{{ {macro}(**{kwargs_name}) }}}}{config}").format(
             macro=self.macro_name(),
             config=self.construct_config(),

@@ -10,7 +10,7 @@ import dbt.flags
 import dbt.parser
 from dbt import tracking
 from dbt.context.context_config import ContextConfig
-from dbt.exceptions import CompilationException
+from dbt.exceptions import CompilationException, ParsingException
 from dbt.parser import (
     ModelParser, MacroParser, SingularTestParser, GenericTestParser,
     SchemaParser, SnapshotParser, AnalysisParser
@@ -22,7 +22,7 @@ from dbt.parser.search import FileBlock
 from dbt.parser.generic_test_builders import YamlBlock
 from dbt.parser.sources import SourcePatcher
 
-from dbt.node_types import NodeType
+from dbt.node_types import NodeType, ModelLanguage
 from dbt.contracts.files import SourceFile, FileHash, FilePath, SchemaSourceFile
 from dbt.contracts.graph.manifest import Manifest
 from dbt.contracts.graph.model_config import (
@@ -66,7 +66,6 @@ class BaseParserTest(unittest.TestCase):
                 unique_id=f'macro.root.{name}',
                 package_name='root',
                 original_file_path=normalize('macros/macro.sql'),
-                root_path=get_abs_os_path('./dbt_packages/root'),
                 path=normalize('macros/macro.sql'),
                 macro_sql=sql,
             )
@@ -177,6 +176,19 @@ def assertEqualNodes(node_one, node_two):
     node_two_dict = node_two.to_dict()
     if 'created_at' in node_two_dict:
         del node_two_dict['created_at']
+    # we don't reall care the order of packages, doing this because it is hard to
+    # make config.packages a set instead of a list
+    if 'config' in node_one_dict and 'packages' in node_one_dict['config']:
+        if not 'config' in node_two_dict and 'packages' in node_two_dict['config']:
+            return False
+        node_one_dict['config']['packages'] = set(node_one_dict['config']['packages'])
+        node_two_dict['config']['packages'] = set(node_two_dict['config']['packages'])
+        node_one_dict['unrendered_config']['packages'] = set(node_one_dict['config']['packages'])
+        node_two_dict['unrendered_config']['packages'] = set(node_two_dict['config']['packages'])
+        if 'packages' in node_one_dict['config_call_dict']:
+            node_one_dict['config_call_dict']['packages'] = set(node_one_dict['config_call_dict']['packages'])
+            node_two_dict['config_call_dict']['packages'] = set(node_two_dict['config_call_dict']['packages'])
+
     assert node_one_dict == node_two_dict
 
 
@@ -492,8 +504,8 @@ class ModelParserTest(BaseParserTest):
         return super().file_block_for(data, filename, 'models')
 
     def test_basic(self):
-        raw_sql = '{{ config(materialized="table") }}select 1 as id'
-        block = self.file_block_for(raw_sql, 'nested/model_1.sql')
+        raw_code = '{{ config(materialized="table") }}select 1 as id'
+        block = self.file_block_for(raw_code, 'nested/model_1.sql')
         self.parser.manifest.files[block.file.file_id] = block.file
         self.parser.parse_file(block)
         self.assert_has_manifest_lengths(self.parser.manifest, nodes=1)
@@ -508,22 +520,223 @@ class ModelParserTest(BaseParserTest):
             fqn=['snowplow', 'nested', 'model_1'],
             package_name='snowplow',
             original_file_path=normalize('models/nested/model_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             config=NodeConfig(materialized='table'),
             path=normalize('nested/model_1.sql'),
-            raw_sql=raw_sql,
+            language='sql',
+            raw_code=raw_code,
             checksum=block.file.checksum,
             unrendered_config={'materialized': 'table'},
+            config_call_dict={
+                'materialized': 'table',
+            },
         )
         assertEqualNodes(node, expected)
         file_id = 'snowplow://' + normalize('models/nested/model_1.sql')
         self.assertIn(file_id, self.parser.manifest.files)
         self.assertEqual(self.parser.manifest.files[file_id].nodes, ['model.snowplow.model_1'])
+    
+    def test_parse_python_file(self):
+        py_code = """
+def model(dbt, session):
+    dbt.config(
+        materialized='table',
+        packages = ['sklearn==0.1.0']
+    )
+    import textblob
+    import text as a
+    from torch import b
+    import textblob.text
+    import sklearn
+    df0 = pandas(dbt.ref("a_model"))
+    df1 = dbt.ref("my_sql_model").task.limit(2)
+    df2 = dbt.ref("my_sql_model_1")
+    df3 = dbt.ref("my_sql_model_2")
+    df4 = dbt.source("test", 'table1').limit(max = [max(dbt.ref('something'))])
+    df5 = [dbt.ref('test1')]
+    
+    a_dict = {'test2' : dbt.ref('test2')}
+    df5 = anotherfunction({'test2' : dbt.ref('test3')})
+    df6 = [somethingelse.ref(dbt.ref("test4"))]
+
+    df = df.limit(2)
+    return df   
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        self.parser.parse_file(block)
+        self.assert_has_manifest_lengths(self.parser.manifest, nodes=1)
+        node = list(self.parser.manifest.nodes.values())[0]
+        # we decided to not detect and auto supply for now since import name doesn't always match library name
+        python_packages = ['sklearn==0.1.0']
+        expected = ParsedModelNode(
+            alias='py_model',
+            name='py_model',
+            database='test',
+            schema='analytics',
+            resource_type=NodeType.Model,
+            unique_id='model.snowplow.py_model',
+            fqn=['snowplow', 'nested', 'py_model'],
+            package_name='snowplow',
+            original_file_path=normalize('models/nested/py_model.py'),
+            config=NodeConfig(materialized='table', packages=python_packages),
+            # config.packages = ['textblob']
+            path=normalize('nested/py_model.py'),
+            language='python',
+            raw_code=py_code,
+            checksum=block.file.checksum,
+            unrendered_config={'materialized': 'table', 'packages':python_packages},
+            config_call_dict={'materialized': 'table', 'packages':python_packages},
+            refs=[['a_model'], ['my_sql_model'], ['my_sql_model_1'], ['my_sql_model_2'], ['something'], ['test1'], ['test2'], ['test3'], ['test4']],
+            sources = [['test', 'table1']],
+        )
+        assertEqualNodes(node, expected)
+        file_id = 'snowplow://' + normalize('models/nested/py_model.py')
+        self.assertIn(file_id, self.parser.manifest.files)
+        self.assertEqual(self.parser.manifest.files[file_id].nodes, ['model.snowplow.py_model'])
+
+    def test_python_model_config_get(self):
+        py_code = """
+def model(dbt, session):
+    dbt.config.get("param_1")
+    dbt.config.get("param_2")
+    return df
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        
+        self.parser.parse_file(block)
+        node = list(self.parser.manifest.nodes.values())[0]
+        self.assertEqual(node.config.to_dict()["config_keys_used"], ["param_1", "param_2"])
+
+    def test_wrong_python_model_def_miss_session(self):
+        py_code = """
+def model(dbt):
+    dbt.config(
+        materialized='table',
+    )
+    return df
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        with self.assertRaises(ParsingException):
+            self.parser.parse_file(block)
+
+    def test_wrong_python_model_def_miss_session(self):
+        py_code = """
+def model():
+    return df
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        with self.assertRaises(ParsingException):
+            self.parser.parse_file(block)
+
+    def test_wrong_python_model_def_wrong_arg(self):
+        """ First argument for python model should be dbt
+        """
+        py_code = """
+def model(dat, session):
+    dbt.config(
+        materialized='table',
+    )
+    return df
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        with self.assertRaises(ParsingException):
+            self.parser.parse_file(block)
+    
+    def test_wrong_python_model_def_multipe_model(self):
+        py_code = """
+def model(dbt, session):
+    dbt.config(
+        materialized='table',
+    )
+    return df
+
+def model(dbt, session):
+    dbt.config(
+        materialized='table',
+    )
+    return df
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        with self.assertRaises(ParsingException):
+            self.parser.parse_file(block)
+    
+    def test_wrong_python_model_def_no_model(self):
+        py_code = """
+def model1(dbt, session):
+    dbt.config(
+        materialized='table',
+    )
+    return df
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        with self.assertRaises(ParsingException):
+            self.parser.parse_file(block)
+    
+    def test_wrong_python_model_def_mutiple_return(self):
+        py_code = """
+def model(dbt, session):
+    dbt.config(
+        materialized='table',
+    )
+    return df1, df2
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        with self.assertRaises(ParsingException):
+            self.parser.parse_file(block)
+    
+    def test_wrong_python_model_def_no_return(self):
+        py_code = """
+def model(dbt, session):
+    dbt.config(
+        materialized='table',
+    )
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        with self.assertRaises(ParsingException):
+            self.parser.parse_file(block)
+
+    def test_correct_python_model_def_return_function(self):
+        py_code = """
+def model(dbt, session):
+    dbt.config(
+        materialized='table',
+    )
+    return pandas.dataframe([1,2])
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        self.parser.parse_file(block)
 
     def test_parse_error(self):
         block = self.file_block_for('{{ SYNTAX ERROR }}', 'nested/model_1.sql')
         with self.assertRaises(CompilationException):
             self.parser.parse_file(block)
+
+    def test_parse_ref_with_non_string(self):
+        py_code = """
+def model(dbt, session):
+
+    model_names = ["orders", "customers"]
+    models = []
+
+    for model_name in model_names:
+        models.extend(dbt.ref(model_name))
+
+    return models[0]
+        """
+        block = self.file_block_for(py_code, 'nested/py_model.py')
+        self.parser.manifest.files[block.file.file_id] = block.file
+        with self.assertRaises(ParsingException):
+            self.parser.parse_file(block)    
+    
 
 
 class StaticModelParserTest(BaseParserTest):
@@ -549,13 +762,12 @@ class StaticModelParserTest(BaseParserTest):
             unique_id=macro_unique_id,
             package_name='root',
             original_file_path=normalize('macros/macro.sql'),
-            root_path=get_abs_os_path('./dbt_packages/root'),
             path=normalize('macros/macro.sql'),
             macro_sql='{% macro ref(model_name) %}{% set x = raise("boom") %}{% endmacro %}',
         )
 
-        raw_sql = '{{ config(materialized="table") }}select 1 as id'
-        block = self.file_block_for(raw_sql, 'nested/model_1.sql')
+        raw_code = '{{ config(materialized="table") }}select 1 as id'
+        block = self.file_block_for(raw_code, 'nested/model_1.sql')
         node = ParsedModelNode(
             alias='model_1',
             name='model_1',
@@ -566,10 +778,10 @@ class StaticModelParserTest(BaseParserTest):
             fqn=['snowplow', 'nested', 'model_1'],
             package_name='snowplow',
             original_file_path=normalize('models/nested/model_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             config=NodeConfig(materialized='table'),
             path=normalize('nested/model_1.sql'),
-            raw_sql=raw_sql,
+            language='sql',
+            raw_code=raw_code,
             checksum=block.file.checksum,
             unrendered_config={'materialized': 'table'},
         )
@@ -601,10 +813,10 @@ class StaticModelParserUnitTest(BaseParserTest):
             fqn=['snowplow', 'nested', 'model_1'],
             package_name='snowplow',
             original_file_path=normalize('models/nested/model_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             config=NodeConfig(materialized='table'),
             path=normalize('nested/model_1.sql'),
-            raw_sql='{{ config(materialized="table") }}select 1 as id',
+            language='sql',
+            raw_code='{{ config(materialized="table") }}select 1 as id',
             checksum=None,
             unrendered_config={'materialized': 'table'},
         )
@@ -756,7 +968,7 @@ class SnapshotParserTest(BaseParserTest):
             self.parser.parse_file(block)
 
     def test_single_block(self):
-        raw_sql = '''{{
+        raw_code = '''{{
                 config(unique_key="id", target_schema="analytics",
                        target_database="dbt", strategy="timestamp",
                        updated_at="last_update")
@@ -764,7 +976,7 @@ class SnapshotParserTest(BaseParserTest):
             select 1 as id, now() as last_update'''
         full_file = '''
         {{% snapshot foo %}}{}{{% endsnapshot %}}
-        '''.format(raw_sql)
+        '''.format(raw_code)
         block = self.file_block_for(full_file, 'nested/snap_1.sql')
         self.parser.manifest.files[block.file.file_id] = block.file
         self.parser.parse_file(block)
@@ -781,7 +993,6 @@ class SnapshotParserTest(BaseParserTest):
             fqn=['snowplow', 'nested', 'snap_1', 'foo'],
             package_name='snowplow',
             original_file_path=normalize('snapshots/nested/snap_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             config=SnapshotConfig(
                 strategy='timestamp',
                 updated_at='last_update',
@@ -791,13 +1002,21 @@ class SnapshotParserTest(BaseParserTest):
                 materialized='snapshot',
             ),
             path=normalize('nested/snap_1.sql'),
-            raw_sql=raw_sql,
+            language='sql',
+            raw_code=raw_code,
             checksum=block.file.checksum,
             unrendered_config={
                 'unique_key': 'id',
                 'target_schema': 'analytics',
                 'target_database': 'dbt',
                 'strategy': 'timestamp',
+                'updated_at': 'last_update',
+            },
+            config_call_dict={
+                'strategy': 'timestamp', 
+                'target_database': 'dbt', 
+                'target_schema': 'analytics', 
+                'unique_key': 'id', 
                 'updated_at': 'last_update',
             },
         )
@@ -842,7 +1061,6 @@ class SnapshotParserTest(BaseParserTest):
             fqn=['snowplow', 'nested', 'snap_1', 'foo'],
             package_name='snowplow',
             original_file_path=normalize('snapshots/nested/snap_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             config=SnapshotConfig(
                 strategy='timestamp',
                 updated_at='last_update',
@@ -852,13 +1070,21 @@ class SnapshotParserTest(BaseParserTest):
                 materialized='snapshot',
             ),
             path=normalize('nested/snap_1.sql'),
-            raw_sql=raw_1,
+            language='sql',
+            raw_code=raw_1,
             checksum=block.file.checksum,
             unrendered_config={
                 'unique_key': 'id',
                 'target_schema': 'analytics',
                 'target_database': 'dbt',
                 'strategy': 'timestamp',
+                'updated_at': 'last_update',
+            },
+            config_call_dict={
+                'strategy': 'timestamp', 
+                'target_database': 'dbt', 
+                'target_schema': 'analytics', 
+                'unique_key': 'id', 
                 'updated_at': 'last_update',
             },
         )
@@ -872,7 +1098,6 @@ class SnapshotParserTest(BaseParserTest):
             fqn=['snowplow', 'nested', 'snap_1', 'bar'],
             package_name='snowplow',
             original_file_path=normalize('snapshots/nested/snap_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             config=SnapshotConfig(
                 strategy='timestamp',
                 updated_at='last_update',
@@ -882,13 +1107,21 @@ class SnapshotParserTest(BaseParserTest):
                 materialized='snapshot',
             ),
             path=normalize('nested/snap_1.sql'),
-            raw_sql=raw_2,
+            language='sql',
+            raw_code=raw_2,
             checksum=block.file.checksum,
             unrendered_config={
                 'unique_key': 'id',
                 'target_schema': 'analytics',
                 'target_database': 'dbt',
                 'strategy': 'timestamp',
+                'updated_at': 'last_update',
+            },
+            config_call_dict={
+                'strategy': 'timestamp', 
+                'target_database': 'dbt', 
+                'target_schema': 'analytics', 
+                'unique_key': 'id', 
                 'updated_at': 'last_update',
             },
         )
@@ -912,8 +1145,8 @@ class MacroParserTest(BaseParserTest):
         return super().file_block_for(data, filename, 'macros')
 
     def test_single_block(self):
-        raw_sql = '{% macro foo(a, b) %}a ~ b{% endmacro %}'
-        block = self.file_block_for(raw_sql, 'macro.sql')
+        raw_code = '{% macro foo(a, b) %}a ~ b{% endmacro %}'
+        block = self.file_block_for(raw_code, 'macro.sql')
         self.parser.manifest.files[block.file.file_id] = block.file
         self.parser.parse_file(block)
         self.assertEqual(len(self.parser.manifest.macros), 1)
@@ -924,9 +1157,8 @@ class MacroParserTest(BaseParserTest):
             unique_id='macro.snowplow.foo',
             package_name='snowplow',
             original_file_path=normalize('macros/macro.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             path=normalize('macros/macro.sql'),
-            macro_sql=raw_sql,
+            macro_sql=raw_code,
         )
         assertEqualNodes(macro, expected)
         file_id = 'snowplow://' + normalize('macros/macro.sql')
@@ -934,8 +1166,8 @@ class MacroParserTest(BaseParserTest):
         self.assertEqual(self.parser.manifest.files[file_id].macros, ['macro.snowplow.foo'])
 
     def test_multiple_blocks(self):
-        raw_sql = '{% macro foo(a, b) %}a ~ b{% endmacro %}\n{% macro bar(c, d) %}c + d{% endmacro %}'
-        block = self.file_block_for(raw_sql, 'macro.sql')
+        raw_code = '{% macro foo(a, b) %}a ~ b{% endmacro %}\n{% macro bar(c, d) %}c + d{% endmacro %}'
+        block = self.file_block_for(raw_code, 'macro.sql')
         print(f"--- test_multiple_blocks block: {block}")
         self.parser.manifest.files[block.file.file_id] = block.file
         self.parser.parse_file(block)
@@ -947,7 +1179,6 @@ class MacroParserTest(BaseParserTest):
             unique_id='macro.snowplow.bar',
             package_name='snowplow',
             original_file_path=normalize('macros/macro.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             path=normalize('macros/macro.sql'),
             macro_sql='{% macro bar(c, d) %}c + d{% endmacro %}',
         )
@@ -957,7 +1188,6 @@ class MacroParserTest(BaseParserTest):
             unique_id='macro.snowplow.foo',
             package_name='snowplow',
             original_file_path=normalize('macros/macro.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             path=normalize('macros/macro.sql'),
             macro_sql='{% macro foo(a, b) %}a ~ b{% endmacro %}',
         )
@@ -984,8 +1214,8 @@ class SingularTestParserTest(BaseParserTest):
         return super().file_block_for(data, filename, 'tests')
 
     def test_basic(self):
-        raw_sql = 'select * from {{ ref("blah") }} limit 0'
-        block = self.file_block_for(raw_sql, 'test_1.sql')
+        raw_code = 'select * from {{ ref("blah") }} limit 0'
+        block = self.file_block_for(raw_code, 'test_1.sql')
         self.manifest.files[block.file.file_id] = block.file
         self.parser.parse_file(block)
         self.assert_has_manifest_lengths(self.parser.manifest, nodes=1)
@@ -1000,12 +1230,12 @@ class SingularTestParserTest(BaseParserTest):
             fqn=['snowplow', 'test_1'],
             package_name='snowplow',
             original_file_path=normalize('tests/test_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             refs=[['blah']],
             config=TestConfig(severity='ERROR'),
             tags=[],
             path=normalize('test_1.sql'),
-            raw_sql=raw_sql,
+            language='sql',
+            raw_code=raw_code,
             checksum=block.file.checksum,
             unrendered_config={},
         )
@@ -1028,8 +1258,8 @@ class GenericTestParserTest(BaseParserTest):
         return super().file_block_for(data, filename, 'tests/generic')
 
     def test_basic(self):
-        raw_sql = '{% test not_null(model, column_name) %}select * from {{ model }} where {{ column_name }} is null {% endtest %}'
-        block = self.file_block_for(raw_sql, 'test_1.sql')
+        raw_code = '{% test not_null(model, column_name) %}select * from {{ model }} where {{ column_name }} is null {% endtest %}'
+        block = self.file_block_for(raw_code, 'test_1.sql')
         self.parser.manifest.files[block.file.file_id] = block.file
         self.parser.parse_file(block)
         node = list(self.parser.manifest.macros.values())[0]
@@ -1039,9 +1269,8 @@ class GenericTestParserTest(BaseParserTest):
             unique_id='macro.snowplow.test_not_null',
             package_name='snowplow',
             original_file_path=normalize('tests/generic/test_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             path=normalize('tests/generic/test_1.sql'),
-            macro_sql=raw_sql,
+            macro_sql=raw_code,
         )
         assertEqualNodes(node, expected)
         file_id = 'snowplow://' + normalize('tests/generic/test_1.sql')
@@ -1062,8 +1291,8 @@ class AnalysisParserTest(BaseParserTest):
         return super().file_block_for(data, filename, 'analyses')
 
     def test_basic(self):
-        raw_sql = 'select 1 as id'
-        block = self.file_block_for(raw_sql, 'nested/analysis_1.sql')
+        raw_code = 'select 1 as id'
+        block = self.file_block_for(raw_code, 'nested/analysis_1.sql')
         self.manifest.files[block.file.file_id] = block.file
         self.parser.parse_file(block)
         self.assert_has_manifest_lengths(self.parser.manifest, nodes=1)
@@ -1078,11 +1307,11 @@ class AnalysisParserTest(BaseParserTest):
             fqn=['snowplow', 'analysis', 'nested', 'analysis_1'],
             package_name='snowplow',
             original_file_path=normalize('analyses/nested/analysis_1.sql'),
-            root_path=get_abs_os_path('./dbt_packages/snowplow'),
             depends_on=DependsOn(),
             config=NodeConfig(),
             path=normalize('analysis/nested/analysis_1.sql'),
-            raw_sql=raw_sql,
+            language='sql',
+            raw_code=raw_code,
             checksum=block.file.checksum,
             unrendered_config={},
         )

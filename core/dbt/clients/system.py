@@ -12,6 +12,7 @@ import tarfile
 import requests
 import stat
 from typing import Type, NoReturn, List, Optional, Dict, Any, Tuple, Callable, Union
+from pathspec import PathSpec  # type: ignore
 
 from dbt.events.functions import fire_event
 from dbt.events.types import (
@@ -36,6 +37,7 @@ def find_matching(
     root_path: str,
     relative_paths_to_search: List[str],
     file_pattern: str,
+    ignore_spec: Optional[PathSpec] = None,
 ) -> List[Dict[str, Any]]:
     """
     Given an absolute `root_path`, a list of relative paths to that
@@ -57,19 +59,30 @@ def find_matching(
     reobj = re.compile(regex, re.IGNORECASE)
 
     for relative_path_to_search in relative_paths_to_search:
+        # potential speedup for ignore_spec
+        # if ignore_spec.matches(relative_path_to_search):
+        #     continue
         absolute_path_to_search = os.path.join(root_path, relative_path_to_search)
         walk_results = os.walk(absolute_path_to_search)
 
         for current_path, subdirectories, local_files in walk_results:
+            # potential speedup for ignore_spec
+            # relative_dir = os.path.relpath(current_path, root_path) + os.sep
+            # if ignore_spec.match(relative_dir):
+            #     continue
             for local_file in local_files:
                 absolute_path = os.path.join(current_path, local_file)
                 relative_path = os.path.relpath(absolute_path, absolute_path_to_search)
+                relative_path_to_root = os.path.join(relative_path_to_search, relative_path)
+
                 modification_time = 0.0
                 try:
                     modification_time = os.path.getmtime(absolute_path)
                 except OSError:
                     fire_event(SystemErrorRetrievingModTime(path=absolute_path))
-                if reobj.match(local_file):
+                if reobj.match(local_file) and (
+                    not ignore_spec or not ignore_spec.match_file(relative_path_to_root)
+                ):
                     matching.append(
                         {
                             "searched_path": relative_path_to_search,
@@ -164,7 +177,7 @@ def write_file(path: str, contents: str = "") -> bool:
                 reason = "Path was possibly too long"
             # all our hard work and the path was still too long. Log and
             # continue.
-            fire_event(SystemCouldNotWrite(path=path, reason=reason, exc=exc))
+            fire_event(SystemCouldNotWrite(path=path, reason=reason, exc=str(exc)))
         else:
             raise
     return True
@@ -246,16 +259,17 @@ def _supports_long_paths() -> bool:
     # https://stackoverflow.com/a/35097999/11262881
     # I don't know exaclty what he means, but I am inclined to believe him as
     # he's pretty active on Python windows bugs!
-    try:
-        dll = WinDLL("ntdll")
-    except OSError:  # I don't think this happens? you need ntdll to run python
-        return False
-    # not all windows versions have it at all
-    if not hasattr(dll, "RtlAreLongPathsEnabled"):
-        return False
-    # tell windows we want to get back a single unsigned byte (a bool).
-    dll.RtlAreLongPathsEnabled.restype = c_bool
-    return dll.RtlAreLongPathsEnabled()
+    else:
+        try:
+            dll = WinDLL("ntdll")
+        except OSError:  # I don't think this happens? you need ntdll to run python
+            return False
+        # not all windows versions have it at all
+        if not hasattr(dll, "RtlAreLongPathsEnabled"):
+            return False
+        # tell windows we want to get back a single unsigned byte (a bool).
+        dll.RtlAreLongPathsEnabled.restype = c_bool
+        return dll.RtlAreLongPathsEnabled()
 
 
 def convert_path(path: str) -> str:
@@ -335,7 +349,7 @@ def _handle_posix_cmd_error(exc: OSError, cwd: str, cmd: List[str]) -> NoReturn:
 
 
 def _handle_posix_error(exc: OSError, cwd: str, cmd: List[str]) -> NoReturn:
-    """OSError handling for posix systems.
+    """OSError handling for POSIX systems.
 
     Some things that could happen to trigger an OSError:
         - cwd could not exist
@@ -386,7 +400,7 @@ def _handle_windows_error(exc: OSError, cwd: str, cmd: List[str]) -> NoReturn:
 
 
 def _interpret_oserror(exc: OSError, cwd: str, cmd: List[str]) -> NoReturn:
-    """Interpret an OSError exc and raise the appropriate dbt exception."""
+    """Interpret an OSError exception and raise the appropriate dbt exception."""
     if len(cmd) == 0:
         raise dbt.exceptions.CommandError(cwd, cmd)
 
@@ -443,7 +457,11 @@ def download_with_retries(
     connection_exception_retry(download_fn, 5)
 
 
-def download(url: str, path: str, timeout: Optional[Union[float, tuple]] = None) -> None:
+def download(
+    url: str,
+    path: str,
+    timeout: Optional[Union[float, Tuple[float, float], Tuple[float, None]]] = None,
+) -> None:
     path = convert_path(path)
     connection_timeout = timeout or float(os.getenv("DBT_HTTP_TIMEOUT", 10))
     response = requests.get(url, timeout=connection_timeout)
@@ -507,7 +525,7 @@ def move(src, dst):
     directory on windows when it has read-only files in it and the move is
     between two drives.
 
-    This is almost identical to the real shutil.move, except it uses our rmtree
+    This is almost identical to the real shutil.move, except it, uses our rmtree
     and skips handling non-windows OSes since the existing one works ok there.
     """
     src = convert_path(src)
@@ -542,7 +560,7 @@ def move(src, dst):
 
 
 def rmtree(path):
-    """Recursively remove path. On permissions errors on windows, try to remove
+    """Recursively remove the path. On permissions errors on windows, try to remove
     the read-only flag and try again.
     """
     path = convert_path(path)

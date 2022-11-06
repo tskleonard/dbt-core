@@ -20,9 +20,7 @@ class MacroParser(BaseParser[ParsedMacro]):
     # from the normal parsing flow.
     def get_paths(self) -> List[FilePath]:
         return filesystem_search(
-            project=self.project,
-            relative_dirs=self.project.macro_paths,
-            extension=".sql",
+            project=self.project, relative_dirs=self.project.macro_paths, extension=".sql"
         )
 
     @property
@@ -43,7 +41,6 @@ class MacroParser(BaseParser[ParsedMacro]):
             macro_sql=block.full_block,
             original_file_path=base_node.original_file_path,
             package_name=base_node.package_name,
-            root_path=base_node.root_path,
             resource_type=base_node.resource_type,
             name=name,
             unique_id=unique_id,
@@ -54,7 +51,7 @@ class MacroParser(BaseParser[ParsedMacro]):
             blocks: List[jinja.BlockTag] = [
                 t
                 for t in jinja.extract_toplevel_blocks(
-                    base_node.raw_sql,
+                    base_node.raw_code,
                     allowed_blocks={"macro", "materialization", "test"},
                     collect_raw_data=False,
                 )
@@ -80,13 +77,16 @@ class MacroParser(BaseParser[ParsedMacro]):
                     f"Found multiple macros in {block.full_block}, expected 1", node=base_node
                 )
 
-            macro_name = macro_nodes[0].name
+            macro = macro_nodes[0]
 
-            if not macro_name.startswith(MACRO_PREFIX):
+            if not macro.name.startswith(MACRO_PREFIX):
                 continue
 
-            name: str = macro_name.replace(MACRO_PREFIX, "")
+            name: str = macro.name.replace(MACRO_PREFIX, "")
             node = self.parse_macro(block, base_node, name)
+            # get supported_languages for materialization macro
+            if "materialization" in name:
+                node.supported_languages = jinja.get_supported_languages(macro)
             yield node
 
     def parse_file(self, block: FileBlock):
@@ -101,9 +101,9 @@ class MacroParser(BaseParser[ParsedMacro]):
             path=original_file_path,
             original_file_path=original_file_path,
             package_name=self.project.project_name,
-            raw_sql=source_file.contents,
-            root_path=self.project.project_root,
+            raw_code=source_file.contents,
             resource_type=NodeType.Macro,
+            language="sql",
         )
 
         for node in self.parse_unparsed_macros(base_node):

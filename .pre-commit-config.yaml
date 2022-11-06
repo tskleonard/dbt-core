@@ -6,7 +6,7 @@ exclude: ^test/
 
 # Force all unspecified python hooks to run python 3.8
 default_language_version:
-  python: python3.8
+  python: python3
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -21,18 +21,13 @@ repos:
       - "markdown"
   - id: check-case-conflict
 - repo: https://github.com/psf/black
-  rev: 21.12b0
+  rev: 22.3.0
   hooks:
   - id: black
-    args:
-    - "--line-length=99"
-    - "--target-version=py38"
   - id: black
     alias: black-check
     stages: [manual]
     args:
-    - "--line-length=99"
-    - "--target-version=py38"
     - "--check"
     - "--diff"
 - repo: https://gitlab.com/pycqa/flake8
@@ -43,7 +38,7 @@ repos:
     alias: flake8-check
     stages: [manual]
 - repo: https://github.com/pre-commit/mirrors-mypy
-  rev: v0.782
+  rev: v0.942
   hooks:
   - id: mypy
     # N.B.: Mypy is... a bit fragile.

@@ -5,7 +5,9 @@
 {% macro default__get_merge_sql(target, source, unique_key, dest_columns, predicates) -%}
     {%- set predicates = [] if predicates is none else [] + predicates -%}
     {%- set dest_cols_csv = get_quoted_csv(dest_columns | map(attribute="name")) -%}
-    {%- set update_columns = config.get('merge_update_columns', default = dest_columns | map(attribute="quoted") | list) -%}
+    {%- set merge_update_columns = config.get('merge_update_columns') -%}
+    {%- set merge_exclude_columns = config.get('merge_exclude_columns') -%}
+    {%- set update_columns = get_merge_update_columns(merge_update_columns, merge_exclude_columns, dest_columns) -%}
     {%- set sql_header = config.get('sql_header', none) -%}
 
     {% if unique_key %}
@@ -56,12 +58,25 @@
 
     {%- set dest_cols_csv = get_quoted_csv(dest_columns | map(attribute="name")) -%}
 
-    {% if unique_key is not none %}
-    delete from {{ target }}
-    where ({{ unique_key }}) in (
-        select ({{ unique_key }})
-        from {{ source }}
-    );
+    {% if unique_key %}
+        {% if unique_key is sequence and unique_key is not string %}
+            delete from {{target }}
+            using {{ source }}
+            where (
+                {% for key in unique_key %}
+                    {{ source }}.{{ key }} = {{ target }}.{{ key }}
+                    {{ "and " if not loop.last }}
+                {% endfor %}
+            );
+        {% else %}
+            delete from {{ target }}
+            where (
+                {{ unique_key }}) in (
+                select ({{ unique_key }})
+                from {{ source }}
+            );
+
+        {% endif %}
     {% endif %}
 
     insert into {{ target }} ({{ dest_cols_csv }})
@@ -78,6 +93,10 @@
 {%- endmacro %}
 
 {% macro default__get_insert_overwrite_merge_sql(target, source, dest_columns, predicates, include_sql_header) -%}
+    {#-- The only time include_sql_header is True: --#}
+    {#-- BigQuery + insert_overwrite strategy + "static" partitions config --#}
+    {#-- We should consider including the sql header at the materialization level instead --#}
+
     {%- set predicates = [] if predicates is none else [] + predicates -%}
     {%- set dest_cols_csv = get_quoted_csv(dest_columns | map(attribute="name")) -%}
     {%- set sql_header = config.get('sql_header', none) -%}

@@ -22,7 +22,7 @@ from dbt.config import RuntimeConfig, Project
 from .base import contextmember, contextproperty, Var
 from .configured import FQNLookup
 from .context_config import ContextConfig
-from dbt.logger import SECRET_ENV_PREFIX
+from dbt.constants import SECRET_ENV_PREFIX, DEFAULT_ENV_PLACEHOLDER
 from dbt.context.macro_resolver import MacroResolver, TestMacroNamespace
 from .macros import MacroNamespaceBuilder, MacroNamespace
 from .manifest import ManifestContext
@@ -40,6 +40,8 @@ from dbt.contracts.graph.parsed import (
     ParsedSeedNode,
     ParsedSourceDefinition,
 )
+from dbt.contracts.graph.metrics import MetricReference, ResolvedMetricReference
+from dbt.events.functions import get_metadata_vars
 from dbt.exceptions import (
     CompilationException,
     ParsingException,
@@ -50,17 +52,19 @@ from dbt.exceptions import (
     missing_config,
     raise_compiler_error,
     ref_invalid_args,
-    ref_target_not_found,
+    metric_invalid_args,
+    target_not_found,
     ref_bad_context,
-    source_target_not_found,
     wrapped_exports,
     raise_parsing_error,
     disallow_secret_env_var,
 )
 from dbt.config import IsFQNResource
-from dbt.node_types import NodeType
+from dbt.node_types import NodeType, ModelLanguage
 
-from dbt.utils import merge, AttrDict, MultiDict
+from dbt.utils import merge, AttrDict, MultiDict, args_to_dict
+
+from dbt import selected_resources
 
 import agate
 
@@ -177,7 +181,7 @@ class BaseDatabaseWrapper:
                     return macro
 
         searched = ", ".join(repr(a) for a in attempts)
-        msg = f"In dispatch: No macro named '{macro_name}' found\n" f"    Searched for: {searched}"
+        msg = f"In dispatch: No macro named '{macro_name}' found\n    Searched for: {searched}"
         raise CompilationException(msg)
 
 
@@ -197,7 +201,7 @@ class BaseResolver(metaclass=abc.ABCMeta):
         return self.db_wrapper.Relation
 
     @abc.abstractmethod
-    def __call__(self, *args: str) -> Union[str, RelationProxy]:
+    def __call__(self, *args: str) -> Union[str, RelationProxy, MetricReference]:
         pass
 
 
@@ -215,12 +219,12 @@ class BaseRefResolver(BaseResolver):
     def validate_args(self, name: str, package: Optional[str]):
         if not isinstance(name, str):
             raise CompilationException(
-                f"The name argument to ref() must be a string, got " f"{type(name)}"
+                f"The name argument to ref() must be a string, got {type(name)}"
             )
 
         if package is not None and not isinstance(package, str):
             raise CompilationException(
-                f"The package argument to ref() must be a string or None, got " f"{type(package)}"
+                f"The package argument to ref() must be a string or None, got {type(package)}"
             )
 
     def __call__(self, *args: str) -> RelationProxy:
@@ -261,6 +265,41 @@ class BaseSourceResolver(BaseResolver):
             )
         self.validate_args(args[0], args[1])
         return self.resolve(args[0], args[1])
+
+
+class BaseMetricResolver(BaseResolver):
+    def resolve(self, name: str, package: Optional[str] = None) -> MetricReference:
+        ...
+
+    def _repack_args(self, name: str, package: Optional[str]) -> List[str]:
+        if package is None:
+            return [name]
+        else:
+            return [package, name]
+
+    def validate_args(self, name: str, package: Optional[str]):
+        if not isinstance(name, str):
+            raise CompilationException(
+                f"The name argument to metric() must be a string, got {type(name)}"
+            )
+
+        if package is not None and not isinstance(package, str):
+            raise CompilationException(
+                f"The package argument to metric() must be a string or None, got {type(package)}"
+            )
+
+    def __call__(self, *args: str) -> MetricReference:
+        name: str
+        package: Optional[str] = None
+
+        if len(args) == 1:
+            name = args[0]
+        elif len(args) == 2:
+            package, name = args
+        else:
+            metric_invalid_args(self.model, args)
+        self.validate_args(name, package)
+        return self.resolve(name, package)
 
 
 class Config(Protocol):
@@ -436,10 +475,11 @@ class RuntimeRefResolver(BaseRefResolver):
         )
 
         if target_model is None or isinstance(target_model, Disabled):
-            ref_target_not_found(
-                self.model,
-                target_name,
-                target_package,
+            target_not_found(
+                node=self.model,
+                target_name=target_name,
+                target_kind="node",
+                target_package=target_package,
                 disabled=isinstance(target_model, Disabled),
             )
         self.validate(target_model, target_name, target_package)
@@ -501,12 +541,41 @@ class RuntimeSourceResolver(BaseSourceResolver):
         )
 
         if target_source is None or isinstance(target_source, Disabled):
-            source_target_not_found(
-                self.model,
-                source_name,
-                table_name,
+            target_not_found(
+                node=self.model,
+                target_name=f"{source_name}.{table_name}",
+                target_kind="source",
+                disabled=(isinstance(target_source, Disabled)),
             )
         return self.Relation.create_from_source(target_source)
+
+
+# metric` implementations
+class ParseMetricResolver(BaseMetricResolver):
+    def resolve(self, name: str, package: Optional[str] = None) -> MetricReference:
+        self.model.metrics.append(self._repack_args(name, package))
+
+        return MetricReference(name, package)
+
+
+class RuntimeMetricResolver(BaseMetricResolver):
+    def resolve(self, target_name: str, target_package: Optional[str] = None) -> MetricReference:
+        target_metric = self.manifest.resolve_metric(
+            target_name,
+            target_package,
+            self.current_project,
+            self.model.package_name,
+        )
+
+        if target_metric is None or isinstance(target_metric, Disabled):
+            target_not_found(
+                node=self.model,
+                target_name=target_name,
+                target_kind="metric",
+                target_package=target_package,
+            )
+
+        return ResolvedMetricReference(target_metric, self.manifest, self.Relation)
 
 
 # `var` implementations.
@@ -566,6 +635,7 @@ class Provider(Protocol):
     Var: Type[ModelConfiguredVar]
     ref: Type[BaseRefResolver]
     source: Type[BaseSourceResolver]
+    metric: Type[BaseMetricResolver]
 
 
 class ParseProvider(Provider):
@@ -575,6 +645,7 @@ class ParseProvider(Provider):
     Var = ParseVar
     ref = ParseRefResolver
     source = ParseSourceResolver
+    metric = ParseMetricResolver
 
 
 class GenerateNameProvider(Provider):
@@ -584,6 +655,7 @@ class GenerateNameProvider(Provider):
     Var = RuntimeVar
     ref = ParseRefResolver
     source = ParseSourceResolver
+    metric = ParseMetricResolver
 
 
 class RuntimeProvider(Provider):
@@ -593,6 +665,7 @@ class RuntimeProvider(Provider):
     Var = RuntimeVar
     ref = RuntimeRefResolver
     source = RuntimeSourceResolver
+    metric = RuntimeMetricResolver
 
 
 class OperationProvider(RuntimeProvider):
@@ -637,6 +710,14 @@ class ProviderContext(ManifestContext):
             internal_packages,
             self.model,
         )
+
+    @contextproperty
+    def dbt_metadata_envs(self) -> Dict[str, str]:
+        return get_metadata_vars()
+
+    @contextproperty
+    def invocation_args_dict(self):
+        return args_to_dict(self.config.args)
 
     @contextproperty
     def _sql_results(self) -> Dict[str, AttrDict]:
@@ -722,6 +803,7 @@ class ProviderContext(ManifestContext):
             raise_compiler_error(
                 "can only load_agate_table for seeds (got a {})".format(self.model.resource_type)
             )
+        assert self.model.root_path
         path = os.path.join(self.model.root_path, self.model.original_file_path)
         column_types = self.model.config.column_types
         try:
@@ -775,6 +857,10 @@ class ProviderContext(ManifestContext):
     @contextproperty
     def source(self) -> Callable:
         return self.provider.source(self.db_wrapper, self.model, self.config, self.manifest)
+
+    @contextproperty
+    def metric(self) -> Callable:
+        return self.provider.metric(self.db_wrapper, self.model, self.config, self.manifest)
 
     @contextproperty("config")
     def ctx_config(self) -> Config:
@@ -1081,7 +1167,12 @@ class ProviderContext(ManifestContext):
 
     @contextproperty("model")
     def ctx_model(self) -> Dict[str, Any]:
-        return self.model.to_dict(omit_none=True)
+        ret = self.model.to_dict(omit_none=True)
+        # Maintain direct use of compiled_sql
+        # TODO add depreciation logic[CT-934]
+        if "compiled_code" in ret:
+            ret["compiled_sql"] = ret["compiled_code"]
+        return ret
 
     @contextproperty
     def pre_hooks(self) -> Optional[List[Dict[str, Any]]]:
@@ -1130,7 +1221,14 @@ class ProviderContext(ManifestContext):
             # Save the env_var value in the manifest and the var name in the source_file.
             # If this is compiling, do not save because it's irrelevant to parsing.
             if self.model and not hasattr(self.model, "compiled"):
-                self.manifest.env_vars[var] = return_value
+                # If the environment variable is set from a default, store a string indicating
+                # that so we can skip partial parsing.  Otherwise the file will be scheduled for
+                # reparsing. If the default changes, the file will have been updated and therefore
+                # will be scheduled for reparsing anyways.
+                self.manifest.env_vars[var] = (
+                    return_value if var in os.environ else DEFAULT_ENV_PLACEHOLDER
+                )
+
                 # hooks come from dbt_project.yml which doesn't have a real file_id
                 if self.model.file_id in self.manifest.files:
                     source_file = self.manifest.files[self.model.file_id]
@@ -1143,11 +1241,33 @@ class ProviderContext(ManifestContext):
             msg = f"Env var required but not provided: '{var}'"
             raise_parsing_error(msg)
 
+    @contextproperty
+    def selected_resources(self) -> List[str]:
+        """The `selected_resources` variable contains a list of the resources
+        selected based on the parameters provided to the dbt command.
+        Currently, is not populated for the command `run-operation` that
+        doesn't support `--select`.
+        """
+        return selected_resources.SELECTED_RESOURCES
+
+    @contextmember
+    def submit_python_job(self, parsed_model: Dict, compiled_code: str) -> AdapterResponse:
+        # Check macro_stack and that the unique id is for a materialization macro
+        if not (
+            self.context_macro_stack.depth == 2
+            and self.context_macro_stack.call_stack[1] == "macro.dbt.statement"
+            and "materialization" in self.context_macro_stack.call_stack[0]
+        ):
+            raise RuntimeException(
+                f"submit_python_job is not intended to be called here, at model {parsed_model['alias']}, with macro call_stack {self.context_macro_stack.call_stack}."
+            )
+        return self.adapter.submit_python_job(parsed_model, compiled_code)
+
 
 class MacroContext(ProviderContext):
     """Internally, macros can be executed like nodes, with some restrictions:
 
-    - they don't have have all values available that nodes do:
+    - they don't have all values available that nodes do:
        - 'this', 'pre_hooks', 'post_hooks', and 'sql' are missing
        - 'schema' does not use any 'model' information
     - they can't be configured with config() directives
@@ -1193,9 +1313,20 @@ class ModelContext(ProviderContext):
 
     @contextproperty
     def sql(self) -> Optional[str]:
+        # only doing this in sql model for backward compatible
+        if (
+            getattr(self.model, "extra_ctes_injected", None)
+            and self.model.language == ModelLanguage.sql  # type: ignore[union-attr]
+        ):
+            # TODO CT-211
+            return self.model.compiled_code  # type: ignore[union-attr]
+        return None
+
+    @contextproperty
+    def compiled_code(self) -> Optional[str]:
         if getattr(self.model, "extra_ctes_injected", None):
             # TODO CT-211
-            return self.model.compiled_sql  # type: ignore[union-attr]
+            return self.model.compiled_code  # type: ignore[union-attr]
         return None
 
     @contextproperty
@@ -1344,7 +1475,7 @@ class MetricRefResolver(BaseResolver):
         if not isinstance(name, str):
             raise ParsingException(
                 f"In a metrics section in {self.model.original_file_path} "
-                f"the name argument to ref() must be a string"
+                "the name argument to ref() must be a string"
             )
 
 
@@ -1357,6 +1488,12 @@ def generate_parse_metrics(
     project = config.load_dependencies()[package_name]
     return {
         "ref": MetricRefResolver(
+            None,
+            metric,
+            project,
+            manifest,
+        ),
+        "metric": ParseMetricResolver(
             None,
             metric,
             project,
@@ -1428,7 +1565,13 @@ class TestContext(ProviderContext):
         if return_value is not None:
             # Save the env_var value in the manifest and the var name in the source_file
             if self.model:
-                self.manifest.env_vars[var] = return_value
+                # If the environment variable is set from a default, store a string indicating
+                # that so we can skip partial parsing.  Otherwise the file will be scheduled for
+                # reparsing. If the default changes, the file will have been updated and therefore
+                # will be scheduled for reparsing anyways.
+                self.manifest.env_vars[var] = (
+                    return_value if var in os.environ else DEFAULT_ENV_PLACEHOLDER
+                )
                 # the "model" should only be test nodes, but just in case, check
                 # TODO CT-211
                 if self.model.resource_type == NodeType.Test and self.model.file_key_name:  # type: ignore[union-attr] # noqa

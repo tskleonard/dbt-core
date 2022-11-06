@@ -94,7 +94,7 @@ class Connection(ExtensibleDbtClassMixin, Replaceable):
                 self._handle.resolve(self)
             except RecursionError as exc:
                 raise InternalException(
-                    "A connection's open() method attempted to read the " "handle value"
+                    "A connection's open() method attempted to read the handle value"
                 ) from exc
         return self._handle
 
@@ -104,7 +104,7 @@ class Connection(ExtensibleDbtClassMixin, Replaceable):
 
 
 class LazyHandle:
-    """Opener must be a callable that takes a Connection object and opens the
+    """The opener must be a callable that takes a Connection object and opens the
     connection, updating the handle on the Connection.
     """
 

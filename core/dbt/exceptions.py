@@ -2,11 +2,9 @@ import builtins
 import functools
 from typing import NoReturn, Optional, Mapping, Any
 
-from dbt.events.functions import fire_event, scrub_secrets, env_secrets
-from dbt.events.types import GeneralWarningMsg, GeneralWarningException
+from dbt.events.helpers import env_secrets, scrub_secrets
+from dbt.events.types import GeneralMacroWarning
 from dbt.node_types import NodeType
-from dbt import flags
-from dbt.ui import line_wrap_message, warning_tag
 
 import dbt.dataclass_schema
 
@@ -122,9 +120,9 @@ class RuntimeException(RuntimeError, Exception):
 
         result.update(
             {
-                "raw_sql": self.node.raw_sql,
+                "raw_code": self.node.raw_code,
                 # the node isn't always compiled, but if it is, include that!
-                "compiled_sql": getattr(self.node, "compiled_sql", None),
+                "compiled_code": getattr(self.node, "compiled_code", None),
             }
         )
         return result
@@ -203,7 +201,7 @@ class DatabaseException(RuntimeException):
         lines = []
 
         if hasattr(self.node, "build_path") and self.node.build_path:
-            lines.append("compiled SQL at {}".format(self.node.build_path))
+            lines.append("compiled Code at {}".format(self.node.build_path))
 
         return lines + RuntimeException.process_stack(self)
 
@@ -383,10 +381,11 @@ class FailedToConnectException(DatabaseException):
 
 class CommandError(RuntimeException):
     def __init__(self, cwd, cmd, message="Error running command"):
+        cmd_scrubbed = list(scrub_secrets(cmd_txt, env_secrets()) for cmd_txt in cmd)
         super().__init__(message)
         self.cwd = cwd
-        self.cmd = cmd
-        self.args = (cwd, cmd, message)
+        self.cmd = cmd_scrubbed
+        self.args = (cwd, cmd_scrubbed, message)
 
     def __str__(self):
         if len(self.cmd) == 0:
@@ -411,9 +410,9 @@ class CommandResultError(CommandError):
     def __init__(self, cwd, cmd, returncode, stdout, stderr, message="Got a non-zero returncode"):
         super().__init__(cwd, cmd, message)
         self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-        self.args = (cwd, cmd, returncode, stdout, stderr, message)
+        self.stdout = scrub_secrets(stdout.decode("utf-8"), env_secrets())
+        self.stderr = scrub_secrets(stderr.decode("utf-8"), env_secrets())
+        self.args = (cwd, self.cmd, returncode, self.stdout, self.stderr, message)
 
     def __str__(self):
         return "{} running: {}".format(self.msg, self.cmd)
@@ -434,6 +433,10 @@ class InvalidSelectorException(RuntimeException):
     def __init__(self, name: str):
         self.name = name
         super().__init__(name)
+
+
+class DuplicateYamlKeyException(CompilationException):
+    pass
 
 
 def raise_compiler_error(msg, node=None) -> NoReturn:
@@ -501,7 +504,7 @@ def invalid_type_error(
 
 
 def invalid_bool_error(got_value, macro_name) -> NoReturn:
-    """Raise a CompilationException when an macro expects a boolean but gets some
+    """Raise a CompilationException when a macro expects a boolean but gets some
     other value.
     """
     msg = (
@@ -513,6 +516,12 @@ def invalid_bool_error(got_value, macro_name) -> NoReturn:
 
 def ref_invalid_args(model, args) -> NoReturn:
     raise_compiler_error("ref() takes at most two arguments ({} given)".format(len(args)), model)
+
+
+def metric_invalid_args(model, args) -> NoReturn:
+    raise_compiler_error(
+        "metric() takes at most two arguments ({} given)".format(len(args)), model
+    )
 
 
 def ref_bad_context(model, args) -> NoReturn:
@@ -559,26 +568,30 @@ def doc_target_not_found(
     raise_compiler_error(msg, model)
 
 
-def _get_target_failure_msg(
-    model,
+def get_not_found_or_disabled_msg(
+    original_file_path,
+    unique_id,
+    resource_type_title,
     target_name: str,
-    target_model_package: Optional[str],
-    include_path: bool,
-    reason: str,
     target_kind: str,
+    target_package: Optional[str] = None,
+    disabled: Optional[bool] = None,
 ) -> str:
+    if disabled is None:
+        reason = "was not found or is disabled"
+    elif disabled is True:
+        reason = "is disabled"
+    else:
+        reason = "was not found"
+
     target_package_string = ""
-    if target_model_package is not None:
-        target_package_string = "in package '{}' ".format(target_model_package)
+    if target_package is not None:
+        target_package_string = "in package '{}' ".format(target_package)
 
-    source_path_string = ""
-    if include_path:
-        source_path_string = " ({})".format(model.original_file_path)
-
-    return "{} '{}'{} depends on a {} named '{}' {}which {}".format(
-        model.resource_type.title(),
-        model.unique_id,
-        source_path_string,
+    return "{} '{}' ({}) depends on a {} named '{}' {}which {}".format(
+        resource_type_title,
+        unique_id,
+        original_file_path,
         target_kind,
         target_name,
         target_package_string,
@@ -586,63 +599,24 @@ def _get_target_failure_msg(
     )
 
 
-def get_target_not_found_or_disabled_msg(
-    model,
-    target_model_name: str,
-    target_model_package: Optional[str],
-    disabled: Optional[bool] = None,
-) -> str:
-    if disabled is None:
-        reason = "was not found or is disabled"
-    elif disabled is True:
-        reason = "is disabled"
-    else:
-        reason = "was not found"
-    return _get_target_failure_msg(
-        model,
-        target_model_name,
-        target_model_package,
-        include_path=True,
-        reason=reason,
-        target_kind="node",
-    )
-
-
-def ref_target_not_found(
-    model,
-    target_model_name: str,
-    target_model_package: Optional[str],
-    disabled: Optional[bool] = None,
-) -> NoReturn:
-    msg = get_target_not_found_or_disabled_msg(
-        model, target_model_name, target_model_package, disabled
-    )
-    raise_compiler_error(msg, model)
-
-
-def get_source_not_found_or_disabled_msg(
-    model,
+def target_not_found(
+    node,
     target_name: str,
-    target_table_name: str,
+    target_kind: str,
+    target_package: Optional[str] = None,
     disabled: Optional[bool] = None,
-) -> str:
-    full_name = f"{target_name}.{target_table_name}"
-    if disabled is None:
-        reason = "was not found or is disabled"
-    elif disabled is True:
-        reason = "is disabled"
-    else:
-        reason = "was not found"
-    return _get_target_failure_msg(
-        model, full_name, None, include_path=True, reason=reason, target_kind="source"
+) -> NoReturn:
+    msg = get_not_found_or_disabled_msg(
+        original_file_path=node.original_file_path,
+        unique_id=node.unique_id,
+        resource_type_title=node.resource_type.title(),
+        target_name=target_name,
+        target_kind=target_kind,
+        target_package=target_package,
+        disabled=disabled,
     )
 
-
-def source_target_not_found(
-    model, target_name: str, target_table_name: str, disabled: Optional[bool] = None
-) -> NoReturn:
-    msg = get_source_not_found_or_disabled_msg(model, target_name, target_table_name, disabled)
-    raise_compiler_error(msg, model)
+    raise_compiler_error(msg, node)
 
 
 def dependency_not_found(model, target_model_name):
@@ -704,7 +678,6 @@ def missing_materialization(model, adapter_type):
 
 def bad_package_spec(repo, spec, error_message):
     msg = "Error checking out spec='{}' for repo {}\n{}".format(spec, repo, error_message)
-
     raise InternalException(scrub_secrets(msg, env_secrets()))
 
 
@@ -749,13 +722,25 @@ def package_not_found(package_name):
     raise_dependency_error("Package {} was not found in the package index".format(package_name))
 
 
-def package_version_not_found(package_name, version_range, available_versions):
+def package_version_not_found(
+    package_name, version_range, available_versions, should_version_check
+):
     base_msg = (
-        "Could not find a matching version for package {}\n"
+        "Could not find a matching compatible version for package {}\n"
         "  Requested range: {}\n"
-        "  Available versions: {}"
+        "  Compatible versions: {}\n"
     )
-    raise_dependency_error(base_msg.format(package_name, version_range, available_versions))
+    addendum = (
+        (
+            "\n"
+            "  Not shown: package versions incompatible with installed version of dbt-core\n"
+            "  To include them, run 'dbt --no-version-check deps'"
+        )
+        if should_version_check
+        else ""
+    )
+    msg = base_msg.format(package_name, version_range, available_versions) + addendum
+    raise_dependency_error(msg)
 
 
 def package_structure_malformed():
@@ -857,31 +842,47 @@ def raise_duplicate_macro_name(node_1, node_2, namespace) -> NoReturn:
 
 def raise_duplicate_resource_name(node_1, node_2):
     duped_name = node_1.name
+    node_type = NodeType(node_1.resource_type)
+    pluralized = (
+        node_type.pluralize()
+        if node_1.resource_type == node_2.resource_type
+        else "resources"  # still raise if ref() collision, e.g. model + seed
+    )
 
-    if node_1.resource_type in NodeType.refable():
-        get_func = 'ref("{}")'.format(duped_name)
-    elif node_1.resource_type == NodeType.Source:
+    action = "looking for"
+    # duplicate 'ref' targets
+    if node_type in NodeType.refable():
+        formatted_name = f'ref("{duped_name}")'
+    # duplicate sources
+    elif node_type == NodeType.Source:
         duped_name = node_1.get_full_source_name()
-        get_func = node_1.get_source_representation()
-    elif node_1.resource_type == NodeType.Documentation:
-        get_func = 'doc("{}")'.format(duped_name)
-    elif node_1.resource_type == NodeType.Test and "schema" in node_1.tags:
-        return
+        formatted_name = node_1.get_source_representation()
+    # duplicate docs blocks
+    elif node_type == NodeType.Documentation:
+        formatted_name = f'doc("{duped_name}")'
+    # duplicate generic tests
+    elif node_type == NodeType.Test and hasattr(node_1, "test_metadata"):
+        column_name = f'column "{node_1.column_name}" in ' if node_1.column_name else ""
+        model_name = node_1.file_key_name
+        duped_name = f'{node_1.name}" defined on {column_name}"{model_name}'
+        action = "running"
+        formatted_name = "tests"
+    # all other resource types
     else:
-        get_func = '"{}"'.format(duped_name)
+        formatted_name = duped_name
 
+    # should this be raise_parsing_error instead?
     raise_compiler_error(
-        'dbt found two resources with the name "{}". Since these resources '
-        "have the same name,\ndbt will be unable to find the correct resource "
-        "when {} is used. To fix this,\nchange the name of one of "
-        "these resources:\n- {} ({})\n- {} ({})".format(
-            duped_name,
-            get_func,
-            node_1.unique_id,
-            node_1.original_file_path,
-            node_2.unique_id,
-            node_2.original_file_path,
-        )
+        f"""
+dbt found two {pluralized} with the name "{duped_name}".
+
+Since these resources have the same name, dbt will be unable to find the correct resource
+when {action} {formatted_name}.
+
+To fix this, change the name of one of these resources:
+- {node_1.unique_id} ({node_1.original_file_path})
+- {node_2.unique_id} ({node_2.original_file_path})
+    """.strip()
     )
 
 
@@ -906,7 +907,8 @@ def raise_ambiguous_alias(node_1, node_2, duped_name=None):
 def raise_ambiguous_catalog_match(unique_id, match_1, match_2):
     def get_match_string(match):
         return "{}.{}".format(
-            match.get("metadata", {}).get("schema"), match.get("metadata", {}).get("name")
+            match.get("metadata", {}).get("schema"),
+            match.get("metadata", {}).get("name"),
         )
 
     raise_compiler_error(
@@ -934,9 +936,7 @@ def raise_patch_targets_not_found(patches):
 
 def _fix_dupe_msg(path_1: str, path_2: str, name: str, type_name: str) -> str:
     if path_1 == path_2:
-        return (
-            f"remove one of the {type_name} entries for {name} in this file:\n" f" - {path_1!s}\n"
-        )
+        return f"remove one of the {type_name} entries for {name} in this file:\n - {path_1!s}\n"
     else:
         return (
             f"remove the {type_name} entry for {name} in one of these files:\n"
@@ -985,11 +985,11 @@ def raise_duplicate_source_patch_name(patch_1, patch_2):
     )
 
 
-def raise_invalid_schema_yml_version(path, issue):
+def raise_invalid_property_yml_version(path, issue):
     raise_compiler_error(
-        "The schema file at {} is invalid because {}. Please consult the "
-        "documentation for more information on schema.yml syntax:\n\n"
-        "https://docs.getdbt.com/docs/schemayml-files".format(path, issue)
+        "The yml property file at {} is invalid because {}. Please consult the "
+        "documentation for more information on yml property file syntax:\n\n"
+        "https://docs.getdbt.com/reference/configs-and-properties".format(path, issue)
     )
 
 
@@ -999,19 +999,6 @@ def raise_unrecognized_credentials_type(typename, supported_types):
             typename, ", ".join('"{}"'.format(t) for t in supported_types)
         )
     )
-
-
-def warn_invalid_patch(patch, resource_type):
-    msg = line_wrap_message(
-        f"""\
-        '{patch.name}' is a {resource_type} node, but it is
-        specified in the {patch.yaml_key} section of
-        {patch.original_file_path}.
-        To fix this error, place the `{patch.name}`
-        specification under the {resource_type.pluralize()} key instead.
-        """
-    )
-    warn_or_error(msg, log_fmt=warning_tag("{}"))
 
 
 def raise_not_implemented(msg):
@@ -1027,24 +1014,8 @@ def raise_duplicate_alias(
     raise AliasException(f'Got duplicate keys: ({key_names}) all map to "{canonical_key}"')
 
 
-def warn_or_error(msg, node=None, log_fmt=None):
-    if flags.WARN_ERROR:
-        raise_compiler_error(scrub_secrets(msg, env_secrets()), node)
-    else:
-        fire_event(GeneralWarningMsg(msg=msg, log_fmt=log_fmt))
-
-
-def warn_or_raise(exc, log_fmt=None):
-    if flags.WARN_ERROR:
-        raise exc
-    else:
-        fire_event(GeneralWarningException(exc=exc, log_fmt=log_fmt))
-
-
 def warn(msg, node=None):
-    # there's no reason to expose log_fmt to macros - it's only useful for
-    # handling colors
-    warn_or_error(msg, node=node)
+    dbt.events.functions.warn_or_error(GeneralMacroWarning(msg=msg), node=node)
     return ""
 
 
@@ -1067,7 +1038,7 @@ CONTEXT_EXPORTS = {
         raise_dependency_error,
         raise_duplicate_patch_name,
         raise_duplicate_resource_name,
-        raise_invalid_schema_yml_version,
+        raise_invalid_property_yml_version,
         raise_not_implemented,
         relation_wrong_type,
     ]

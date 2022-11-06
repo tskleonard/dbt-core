@@ -39,6 +39,7 @@ class MethodName(StrEnum):
     Tag = "tag"
     Source = "source"
     Path = "path"
+    File = "file"
     Package = "package"
     Config = "config"
     TestName = "test_name"
@@ -48,6 +49,7 @@ class MethodName(StrEnum):
     Exposure = "exposure"
     Metric = "metric"
     Result = "result"
+    SourceStatus = "source_status"
 
 
 def is_selected_node(fqn: List[str], node_selector: str):
@@ -279,17 +281,23 @@ class MetricSelectorMethod(SelectorMethod):
 
 class PathSelectorMethod(SelectorMethod):
     def search(self, included_nodes: Set[UniqueId], selector: str) -> Iterator[UniqueId]:
-        """Yields nodes from inclucded that match the given path."""
+        """Yields nodes from included that match the given path."""
         # use '.' and not 'root' for easy comparison
         root = Path.cwd()
         paths = set(p.relative_to(root) for p in root.glob(selector))
         for node, real_node in self.all_nodes(included_nodes):
-            if Path(real_node.root_path) != root:
-                continue
             ofp = Path(real_node.original_file_path)
             if ofp in paths:
                 yield node
             elif any(parent in paths for parent in ofp.parents):
+                yield node
+
+
+class FileSelectorMethod(SelectorMethod):
+    def search(self, included_nodes: Set[UniqueId], selector: str) -> Iterator[UniqueId]:
+        """Yields nodes from included that match the given file name."""
+        for node, real_node in self.all_nodes(included_nodes):
+            if Path(real_node.original_file_path).name == selector:
                 yield node
 
 
@@ -346,8 +354,21 @@ class ConfigSelectorMethod(SelectorMethod):
             except AttributeError:
                 continue
             else:
-                if selector == value:
-                    yield node
+                if isinstance(value, list):
+                    if (
+                        (selector in value)
+                        or (CaseInsensitive(selector) == "true" and True in value)
+                        or (CaseInsensitive(selector) == "false" and False in value)
+                    ):
+                        yield node
+                else:
+                    if (
+                        (selector == value)
+                        or (CaseInsensitive(selector) == "true" and value is True)
+                        or (CaseInsensitive(selector) == "false")
+                        and value is False
+                    ):
+                        yield node
 
 
 class ResourceTypeSelectorMethod(SelectorMethod):
@@ -414,22 +435,32 @@ class StateSelectorMethod(SelectorMethod):
 
         return modified
 
-    def recursively_check_macros_modified(self, node, previous_macros):
-        # loop through all macros that this node depends on
+    def recursively_check_macros_modified(self, node, visited_macros):
         for macro_uid in node.depends_on.macros:
-            # avoid infinite recursion if we've already seen this macro
-            if macro_uid in previous_macros:
+            if macro_uid in visited_macros:
                 continue
-            previous_macros.append(macro_uid)
-            # is this macro one of the modified macros?
+            visited_macros.append(macro_uid)
+
             if macro_uid in self.modified_macros:
                 return True
-            # if not, and this macro depends on other macros, keep looping
+
+            # this macro hasn't been modified, but depends on other
+            # macros which each need to be tested for modification
             macro_node = self.manifest.macros[macro_uid]
             if len(macro_node.depends_on.macros) > 0:
-                return self.recursively_check_macros_modified(macro_node, previous_macros)
-            else:
-                return False
+                upstream_macros_changed = self.recursively_check_macros_modified(
+                    macro_node, visited_macros
+                )
+                if upstream_macros_changed:
+                    return True
+                continue
+
+            # this macro hasn't been modified, but we haven't checked
+            # the other macros the node depends on, so keep looking
+            if len(node.depends_on.macros) > len(visited_macros):
+                continue
+
+        return False
 
     def check_macros_modified(self, node):
         # check if there are any changes in macros the first time
@@ -440,8 +471,8 @@ class StateSelectorMethod(SelectorMethod):
             return False
         # recursively loop through upstream macros to see if any is modified
         else:
-            previous_macros = []
-            return self.recursively_check_macros_modified(node, previous_macros)
+            visited_macros = []
+            return self.recursively_check_macros_modified(node, visited_macros)
 
     # TODO check modifed_content and check_modified macro seems a bit redundent
     def check_modified_content(self, old: Optional[SelectorTarget], new: SelectorTarget) -> bool:
@@ -522,12 +553,69 @@ class ResultSelectorMethod(SelectorMethod):
                 yield node
 
 
+class SourceStatusSelectorMethod(SelectorMethod):
+    def search(self, included_nodes: Set[UniqueId], selector: str) -> Iterator[UniqueId]:
+
+        if self.previous_state is None or self.previous_state.sources is None:
+            raise InternalException(
+                "No previous state comparison freshness results in sources.json"
+            )
+        elif self.previous_state.sources_current is None:
+            raise InternalException(
+                "No current state comparison freshness results in sources.json"
+            )
+
+        current_state_sources = {
+            result.unique_id: getattr(result, "max_loaded_at", 0)
+            for result in self.previous_state.sources_current.results
+            if hasattr(result, "max_loaded_at")
+        }
+
+        current_state_sources_runtime_error = {
+            result.unique_id
+            for result in self.previous_state.sources_current.results
+            if not hasattr(result, "max_loaded_at")
+        }
+
+        previous_state_sources = {
+            result.unique_id: getattr(result, "max_loaded_at", 0)
+            for result in self.previous_state.sources.results
+            if hasattr(result, "max_loaded_at")
+        }
+
+        previous_state_sources_runtime_error = {
+            result.unique_id
+            for result in self.previous_state.sources_current.results
+            if not hasattr(result, "max_loaded_at")
+        }
+
+        matches = set()
+        if selector == "fresher":
+            for unique_id in current_state_sources:
+                if unique_id not in previous_state_sources:
+                    matches.add(unique_id)
+                elif current_state_sources[unique_id] > previous_state_sources[unique_id]:
+                    matches.add(unique_id)
+
+            for unique_id in matches:
+                if (
+                    unique_id in previous_state_sources_runtime_error
+                    or unique_id in current_state_sources_runtime_error
+                ):
+                    matches.remove(unique_id)
+
+        for node, real_node in self.all_nodes(included_nodes):
+            if node in matches:
+                yield node
+
+
 class MethodManager:
     SELECTOR_METHODS: Dict[MethodName, Type[SelectorMethod]] = {
         MethodName.FQN: QualifiedNameSelectorMethod,
         MethodName.Tag: TagSelectorMethod,
         MethodName.Source: SourceSelectorMethod,
         MethodName.Path: PathSelectorMethod,
+        MethodName.File: FileSelectorMethod,
         MethodName.Package: PackageSelectorMethod,
         MethodName.Config: ConfigSelectorMethod,
         MethodName.TestName: TestNameSelectorMethod,
@@ -537,6 +625,7 @@ class MethodManager:
         MethodName.Exposure: ExposureSelectorMethod,
         MethodName.Metric: MetricSelectorMethod,
         MethodName.Result: ResultSelectorMethod,
+        MethodName.SourceStatus: SourceStatusSelectorMethod,
     }
 
     def __init__(

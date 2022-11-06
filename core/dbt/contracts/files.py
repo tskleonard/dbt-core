@@ -1,16 +1,14 @@
 import hashlib
 import os
 from dataclasses import dataclass, field
+
 from mashumaro.types import SerializableType
 from typing import List, Optional, Union, Dict, Any
 
+from dbt.constants import MAXIMUM_SEED_SIZE
 from dbt.dataclass_schema import dbtClassMixin, StrEnum
 
 from .util import SourceKey
-
-
-MAXIMUM_SEED_SIZE = 1 * 1024 * 1024
-MAXIMUM_SEED_SIZE_NAME = "1MB"
 
 
 class ParseFileType(StrEnum):
@@ -114,25 +112,34 @@ class FileHash(dbtClassMixin):
 
 @dataclass
 class RemoteFile(dbtClassMixin):
+    def __init__(self, language) -> None:
+        if language == "sql":
+            self.path_end = ".sql"
+        elif language == "python":
+            self.path_end = ".py"
+        else:
+            raise RuntimeError(f"Invalid language for remote File {language}")
+        self.path = f"from remote system{self.path_end}"
+
     @property
     def searched_path(self) -> str:
-        return "from remote system"
+        return self.path
 
     @property
     def relative_path(self) -> str:
-        return "from remote system"
+        return self.path
 
     @property
     def absolute_path(self) -> str:
-        return "from remote system"
+        return self.path
 
     @property
     def original_file_path(self):
-        return "from remote system"
+        return self.path
 
     @property
     def modification_time(self):
-        return "from remote system"
+        return self.path
 
 
 @dataclass
@@ -202,9 +209,9 @@ class SourceFile(BaseSourceFile):
     # TODO: do this a different way. This remote file kludge isn't going
     # to work long term
     @classmethod
-    def remote(cls, contents: str, project_name: str) -> "SourceFile":
+    def remote(cls, contents: str, project_name: str, language: str) -> "SourceFile":
         self = cls(
-            path=RemoteFile(),
+            path=RemoteFile(language),
             checksum=FileHash.from_contents(contents),
             project_name=project_name,
             contents=contents,
@@ -268,11 +275,13 @@ class SchemaSourceFile(BaseSourceFile):
             self.tests[key][name] = []
         self.tests[key][name].append(node_unique_id)
 
+    # this is only used in unit tests
     def remove_tests(self, yaml_key, name):
         if yaml_key in self.tests:
             if name in self.tests[yaml_key]:
                 del self.tests[yaml_key][name]
 
+    # this is only used in tests (unit + functional)
     def get_tests(self, yaml_key, name):
         if yaml_key in self.tests:
             if name in self.tests[yaml_key]:

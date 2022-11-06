@@ -1,6 +1,7 @@
 from abc import abstractmethod
 from datetime import datetime
 from typing import Generic, TypeVar
+import traceback
 
 import dbt.exceptions
 from dbt.contracts.sql import (
@@ -10,7 +11,7 @@ from dbt.contracts.sql import (
     ResultTable,
 )
 from dbt.events.functions import fire_event
-from dbt.events.types import SQlRunnerException
+from dbt.events.types import SQLRunnerException
 from dbt.task.compile import CompileRunner
 
 
@@ -22,7 +23,7 @@ class GenericSqlRunner(CompileRunner, Generic[SQLResult]):
         CompileRunner.__init__(self, config, adapter, node, node_index, num_nodes)
 
     def handle_exception(self, e, ctx):
-        fire_event(SQlRunnerException(exc=e))
+        fire_event(SQLRunnerException(exc=str(e), exc_info=traceback.format_exc()))
         if isinstance(e, dbt.exceptions.Exception):
             if isinstance(e, dbt.exceptions.RuntimeException):
                 e.add_node(ctx.node)
@@ -56,8 +57,8 @@ class GenericSqlRunner(CompileRunner, Generic[SQLResult]):
 class SqlCompileRunner(GenericSqlRunner[RemoteCompileResult]):
     def execute(self, compiled_node, manifest) -> RemoteCompileResult:
         return RemoteCompileResult(
-            raw_sql=compiled_node.raw_sql,
-            compiled_sql=compiled_node.compiled_sql,
+            raw_code=compiled_node.raw_code,
+            compiled_code=compiled_node.compiled_code,
             node=compiled_node,
             timing=[],  # this will get added later
             logs=[],
@@ -66,8 +67,8 @@ class SqlCompileRunner(GenericSqlRunner[RemoteCompileResult]):
 
     def from_run_result(self, result, start_time, timing_info) -> RemoteCompileResult:
         return RemoteCompileResult(
-            raw_sql=result.raw_sql,
-            compiled_sql=result.compiled_sql,
+            raw_code=result.raw_code,
+            compiled_code=result.compiled_code,
             node=result.node,
             timing=timing_info,
             logs=[],
@@ -77,7 +78,7 @@ class SqlCompileRunner(GenericSqlRunner[RemoteCompileResult]):
 
 class SqlExecuteRunner(GenericSqlRunner[RemoteRunResult]):
     def execute(self, compiled_node, manifest) -> RemoteRunResult:
-        _, execute_result = self.adapter.execute(compiled_node.compiled_sql, fetch=True)
+        _, execute_result = self.adapter.execute(compiled_node.compiled_code, fetch=True)
 
         table = ResultTable(
             column_names=list(execute_result.column_names),
@@ -85,8 +86,8 @@ class SqlExecuteRunner(GenericSqlRunner[RemoteRunResult]):
         )
 
         return RemoteRunResult(
-            raw_sql=compiled_node.raw_sql,
-            compiled_sql=compiled_node.compiled_sql,
+            raw_code=compiled_node.raw_code,
+            compiled_code=compiled_node.compiled_code,
             node=compiled_node,
             table=table,
             timing=[],
@@ -96,8 +97,8 @@ class SqlExecuteRunner(GenericSqlRunner[RemoteRunResult]):
 
     def from_run_result(self, result, start_time, timing_info) -> RemoteRunResult:
         return RemoteRunResult(
-            raw_sql=result.raw_sql,
-            compiled_sql=result.compiled_sql,
+            raw_code=result.raw_code,
+            compiled_code=result.compiled_code,
             node=result.node,
             table=result.table,
             timing=timing_info,

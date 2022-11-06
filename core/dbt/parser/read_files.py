@@ -1,3 +1,5 @@
+import os
+import pathspec  # type: ignore
 import pathlib
 from dbt.clients.system import load_file_contents
 from dbt.contracts.files import (
@@ -107,9 +109,9 @@ def load_seed_source_file(match: FilePath, project_name) -> SourceFile:
 
 # Use the FilesystemSearcher to get a bunch of FilePaths, then turn
 # them into a bunch of FileSource objects
-def get_source_files(project, paths, extension, parse_file_type, saved_files):
+def get_source_files(project, paths, extension, parse_file_type, saved_files, ignore_spec):
     # file path list
-    fp_list = filesystem_search(project, paths, extension)
+    fp_list = filesystem_search(project, paths, extension, ignore_spec)
     # file block list
     fb_list = []
     for fp in fp_list:
@@ -129,13 +131,26 @@ def get_source_files(project, paths, extension, parse_file_type, saved_files):
     return fb_list
 
 
-def read_files_for_parser(project, files, dirs, extension, parse_ft, saved_files):
+def read_files_for_parser(project, files, dirs, extensions, parse_ft, saved_files, ignore_spec):
     parser_files = []
-    source_files = get_source_files(project, dirs, extension, parse_ft, saved_files)
-    for sf in source_files:
-        files[sf.file_id] = sf
-        parser_files.append(sf.file_id)
+    for extension in extensions:
+        source_files = get_source_files(
+            project, dirs, extension, parse_ft, saved_files, ignore_spec
+        )
+        for sf in source_files:
+            files[sf.file_id] = sf
+            parser_files.append(sf.file_id)
     return parser_files
+
+
+def generate_dbt_ignore_spec(project_root):
+    ignore_file_path = os.path.join(project_root, ".dbtignore")
+
+    ignore_spec = None
+    if os.path.exists(ignore_file_path):
+        with open(ignore_file_path) as f:
+            ignore_spec = pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, f)
+    return ignore_spec
 
 
 # This needs to read files for multiple projects, so the 'files'
@@ -143,52 +158,99 @@ def read_files_for_parser(project, files, dirs, extension, parse_ft, saved_files
 # the various projects? Is the root project always last? Do the
 # non-root projects need to be done separately in order?
 def read_files(project, files, parser_files, saved_files):
-
+    dbt_ignore_spec = generate_dbt_ignore_spec(project.project_root)
     project_files = {}
 
     project_files["MacroParser"] = read_files_for_parser(
-        project, files, project.macro_paths, ".sql", ParseFileType.Macro, saved_files
+        project,
+        files,
+        project.macro_paths,
+        [".sql"],
+        ParseFileType.Macro,
+        saved_files,
+        dbt_ignore_spec,
     )
 
     project_files["ModelParser"] = read_files_for_parser(
-        project, files, project.model_paths, ".sql", ParseFileType.Model, saved_files
+        project,
+        files,
+        project.model_paths,
+        [".sql", ".py"],
+        ParseFileType.Model,
+        saved_files,
+        dbt_ignore_spec,
     )
 
     project_files["SnapshotParser"] = read_files_for_parser(
-        project, files, project.snapshot_paths, ".sql", ParseFileType.Snapshot, saved_files
+        project,
+        files,
+        project.snapshot_paths,
+        [".sql"],
+        ParseFileType.Snapshot,
+        saved_files,
+        dbt_ignore_spec,
     )
 
     project_files["AnalysisParser"] = read_files_for_parser(
-        project, files, project.analysis_paths, ".sql", ParseFileType.Analysis, saved_files
+        project,
+        files,
+        project.analysis_paths,
+        [".sql"],
+        ParseFileType.Analysis,
+        saved_files,
+        dbt_ignore_spec,
     )
 
     project_files["SingularTestParser"] = read_files_for_parser(
-        project, files, project.test_paths, ".sql", ParseFileType.SingularTest, saved_files
+        project,
+        files,
+        project.test_paths,
+        [".sql"],
+        ParseFileType.SingularTest,
+        saved_files,
+        dbt_ignore_spec,
     )
 
     # all generic tests within /tests must be nested under a /generic subfolder
     project_files["GenericTestParser"] = read_files_for_parser(
-        project, files, project.generic_test_paths, ".sql", ParseFileType.GenericTest, saved_files
+        project,
+        files,
+        project.generic_test_paths,
+        [".sql"],
+        ParseFileType.GenericTest,
+        saved_files,
+        dbt_ignore_spec,
     )
 
     project_files["SeedParser"] = read_files_for_parser(
-        project, files, project.seed_paths, ".csv", ParseFileType.Seed, saved_files
+        project,
+        files,
+        project.seed_paths,
+        [".csv"],
+        ParseFileType.Seed,
+        saved_files,
+        dbt_ignore_spec,
     )
 
     project_files["DocumentationParser"] = read_files_for_parser(
-        project, files, project.docs_paths, ".md", ParseFileType.Documentation, saved_files
+        project,
+        files,
+        project.docs_paths,
+        [".md"],
+        ParseFileType.Documentation,
+        saved_files,
+        dbt_ignore_spec,
     )
 
     project_files["SchemaParser"] = read_files_for_parser(
-        project, files, project.all_source_paths, ".yml", ParseFileType.Schema, saved_files
+        project,
+        files,
+        project.all_source_paths,
+        [".yml", ".yaml"],
+        ParseFileType.Schema,
+        saved_files,
+        dbt_ignore_spec,
     )
-
-    # Also read .yaml files for schema files. Might be better to change
-    # 'read_files_for_parser' accept an array in the future.
-    yaml_files = read_files_for_parser(
-        project, files, project.all_source_paths, ".yaml", ParseFileType.Schema, saved_files
-    )
-    project_files["SchemaParser"].extend(yaml_files)
 
     # Store the parser files for this particular project
     parser_files[project.project_name] = project_files

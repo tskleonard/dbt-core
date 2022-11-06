@@ -18,7 +18,6 @@ from dbt.adapters.base import BaseRelation
 from dbt.clients.jinja import MacroGenerator
 from dbt.context.providers import generate_runtime_model_context
 from dbt.contracts.graph.compiled import CompileResultNode
-from dbt.contracts.graph.manifest import WritableManifest
 from dbt.contracts.graph.model_config import Hook
 from dbt.contracts.graph.parsed import ParsedHookNode
 from dbt.contracts.results import NodeStatus, RunResult, RunStatus, RunningStatus
@@ -26,19 +25,19 @@ from dbt.exceptions import (
     CompilationException,
     InternalException,
     RuntimeException,
+    ValidationException,
     missing_materialization,
 )
-from dbt.events.functions import fire_event, get_invocation_id
+from dbt.events.functions import fire_event, get_invocation_id, info
 from dbt.events.types import (
-    DatabaseErrorRunning,
+    DatabaseErrorRunningHook,
     EmptyLine,
     HooksRunning,
     HookFinished,
-    PrintModelErrorResultLine,
-    PrintModelResultLine,
-    PrintStartLine,
-    PrintHookEndLine,
-    PrintHookStartLine,
+    LogModelResult,
+    LogStartLine,
+    LogHookEndLine,
+    LogHookStartLine,
 )
 from dbt.logger import (
     TextOnly,
@@ -122,6 +121,7 @@ def track_model_run(index, num_nodes, run_model_result):
             "model_id": utils.get_hash(run_model_result.node),
             "hashed_contents": utils.get_hashed_contents(run_model_result.node),
             "timing": [t.to_dict(omit_none=True) for t in run_model_result.timing],
+            "language": str(run_model_result.node.language),
         }
     )
 
@@ -170,13 +170,12 @@ class ModelRunner(CompileRunner):
         return str(relation)
 
     def describe_node(self):
-        return "{} model {}".format(
-            self.node.get_materialization(), self.get_node_representation()
-        )
+        # TODO CL 'language' will be moved to node level when we change representation
+        return f"{self.node.language} {self.node.get_materialization()} model {self.get_node_representation()}"
 
     def print_start_line(self):
         fire_event(
-            PrintStartLine(
+            LogStartLine(
                 description=self.describe_node(),
                 index=self.node_index,
                 total=self.num_nodes,
@@ -187,27 +186,22 @@ class ModelRunner(CompileRunner):
     def print_result_line(self, result):
         description = self.describe_node()
         if result.status == NodeStatus.Error:
-            fire_event(
-                PrintModelErrorResultLine(
-                    description=description,
-                    status=result.status,
-                    index=self.node_index,
-                    total=self.num_nodes,
-                    execution_time=result.execution_time,
-                    node_info=self.node.node_info,
-                )
-            )
+            status = result.status
+            level = "error"
         else:
-            fire_event(
-                PrintModelResultLine(
-                    description=description,
-                    status=result.message,
-                    index=self.node_index,
-                    total=self.num_nodes,
-                    execution_time=result.execution_time,
-                    node_info=self.node.node_info,
-                )
+            status = result.message
+            level = "info"
+        fire_event(
+            LogModelResult(
+                description=description,
+                status=status,
+                index=self.node_index,
+                total=self.num_nodes,
+                execution_time=result.execution_time,
+                node_info=self.node.node_info,
+                info=info(level=level),
             )
+        )
 
     def before_execute(self):
         self.print_start_line()
@@ -218,6 +212,8 @@ class ModelRunner(CompileRunner):
 
     def _build_run_model_result(self, model, context):
         result = context["load_result"]("main")
+        if not result:
+            raise RuntimeException("main is not being called during running model")
         adapter_response = {}
         if isinstance(result.response, dbtClassMixin):
             adapter_response = result.response.to_dict(omit_none=True)
@@ -265,9 +261,20 @@ class ModelRunner(CompileRunner):
             )
         context_config = context["config"]
 
+        mat_has_supported_langs = hasattr(materialization_macro, "supported_languages")
+        model_lang_supported = model.language in materialization_macro.supported_languages
+        if mat_has_supported_langs and not model_lang_supported:
+            str_langs = [str(lang) for lang in materialization_macro.supported_languages]
+            raise ValidationException(
+                f'Materialization "{materialization_macro.name}" only supports languages {str_langs}; '
+                f'got "{model.language}"'
+            )
+
         hook_ctx = self.adapter.pre_model_hook(context_config)
         try:
-            result = MacroGenerator(materialization_macro, context)()
+            result = MacroGenerator(
+                materialization_macro, context, stack=context["context_macro_stack"]
+            )()
         finally:
             self.adapter.post_model_hook(context_config, hook_ctx)
 
@@ -292,7 +299,7 @@ class RunTask(CompileTask):
     def get_hook_sql(self, adapter, hook, idx, num_hooks, extra_context):
         compiler = adapter.get_compiler()
         compiled = compiler.compile_node(hook, self.manifest, extra_context)
-        statement = compiled.compiled_sql
+        statement = compiled.compiled_code
         hook_index = hook.index or num_hooks
         hook_obj = get_hook(statement, index=hook_index)
         return hook_obj.sql or ""
@@ -342,7 +349,7 @@ class RunTask(CompileTask):
             with UniqueID(hook.unique_id):
                 with hook_meta_ctx, startctx:
                     fire_event(
-                        PrintHookStartLine(
+                        LogHookStartLine(
                             statement=hook_text,
                             index=idx,
                             total=num_hooks,
@@ -362,7 +369,7 @@ class RunTask(CompileTask):
                 with finishctx, DbtModelState({"node_status": "passed"}):
                     hook._event_status["node_status"] = RunStatus.Success
                     fire_event(
-                        PrintHookEndLine(
+                        LogHookEndLine(
                             statement=hook_text,
                             status=status,
                             index=idx,
@@ -388,7 +395,7 @@ class RunTask(CompileTask):
         try:
             self.run_hooks(adapter, hook_type, extra_context)
         except RuntimeException:
-            fire_event(DatabaseErrorRunning(hook_type=hook_type.value))
+            fire_event(DatabaseErrorRunningHook(hook_type=hook_type.value))
             raise
 
     def print_results_line(self, results, execution_time):
@@ -398,46 +405,19 @@ class RunTask(CompileTask):
         execution = ""
 
         if execution_time is not None:
-            execution = " in {execution_time:0.2f}s".format(execution_time=execution_time)
+            execution = utils.humanize_execution_time(execution_time=execution_time)
 
         with TextOnly():
             fire_event(EmptyLine())
-        fire_event(HookFinished(stat_line=stat_line, execution=execution))
-
-    def _get_deferred_manifest(self) -> Optional[WritableManifest]:
-        if not self.args.defer:
-            return None
-
-        state = self.previous_state
-        if state is None:
-            raise RuntimeException(
-                "Received a --defer argument, but no value was provided " "to --state"
-            )
-
-        if state.manifest is None:
-            raise RuntimeException(f'Could not find manifest in --state path: "{self.args.state}"')
-        return state.manifest
-
-    def defer_to_manifest(self, adapter, selected_uids: AbstractSet[str]):
-        deferred_manifest = self._get_deferred_manifest()
-        if deferred_manifest is None:
-            return
-        if self.manifest is None:
-            raise InternalException(
-                "Expected to defer to manifest, but there is no runtime " "manifest to defer from!"
-            )
-        self.manifest.merge_from_artifact(
-            adapter=adapter,
-            other=deferred_manifest,
-            selected=selected_uids,
+        fire_event(
+            HookFinished(stat_line=stat_line, execution=execution, execution_time=execution_time)
         )
-        # TODO: is it wrong to write the manifest here? I think it's right...
-        self.write_manifest()
 
     def before_run(self, adapter, selected_uids: AbstractSet[str]):
         with adapter.connection_named("master"):
-            self.create_schemas(adapter, selected_uids)
-            self.populate_adapter_cache(adapter)
+            required_schemas = self.get_model_schemas(adapter, selected_uids)
+            self.create_schemas(adapter, required_schemas)
+            self.populate_adapter_cache(adapter, required_schemas)
             self.defer_to_manifest(adapter, selected_uids)
             self.safe_run_hooks(adapter, RunHookType.Start, {})
 

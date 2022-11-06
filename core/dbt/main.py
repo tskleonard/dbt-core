@@ -1,15 +1,17 @@
 from typing import List
+
 from dbt.logger import log_cache_events, log_manager
 
 import argparse
 import os.path
 import sys
 import traceback
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 
 import dbt.version
-from dbt.events.functions import fire_event, setup_event_logger
+from dbt.events.functions import fire_event, setup_event_logger, LOG_VERSION
 from dbt.events.types import (
     MainEncounteredError,
     MainKeyboardInterrupt,
@@ -41,12 +43,17 @@ from dbt.adapters.factory import reset_adapters, cleanup_connections
 import dbt.tracking
 
 from dbt.utils import ExitCodes, args_to_dict
-from dbt.config.profile import DEFAULT_PROFILES_DIR, read_user_config
-from dbt.exceptions import InternalException, NotImplementedException, FailedToConnectException
+from dbt.config.profile import read_user_config
+from dbt.exceptions import (
+    Exception as dbtException,
+    InternalException,
+    NotImplementedException,
+    FailedToConnectException,
+)
 
 
 class DBTVersion(argparse.Action):
-    """This is very very similar to the builtin argparse._Version action,
+    """This is very similar to the built-in argparse._Version action,
     except it just calls dbt.version.get_version_information().
     """
 
@@ -118,6 +125,9 @@ class DBTArgumentParser(argparse.ArgumentParser):
 
 
 def main(args=None):
+    # Logbook warnings are ignored so we don't have to fork logbook to support python 3.10.
+    # This _only_ works for regular cli invocations.
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="logbook")
     if args is None:
         args = sys.argv[1:]
     with log_manager.applicationbound():
@@ -138,8 +148,9 @@ def main(args=None):
             exit_code = e.code
 
         except BaseException as e:
-            fire_event(MainEncounteredError(e=str(e)))
-            fire_event(MainStackTrace(stack_trace=traceback.format_exc()))
+            fire_event(MainEncounteredError(exc=str(e)))
+            if not isinstance(e, dbtException):
+                fire_event(MainStackTrace(stack_trace=traceback.format_exc()))
             exit_code = ExitCodes.UnhandledError.value
 
     sys.exit(exit_code)
@@ -197,7 +208,7 @@ def track_run(task):
         yield
         dbt.tracking.track_invocation_end(config=task.config, args=task.args, result_type="ok")
     except (NotImplementedException, FailedToConnectException) as e:
-        fire_event(MainEncounteredError(e=str(e)))
+        fire_event(MainEncounteredError(exc=str(e)))
         dbt.tracking.track_invocation_end(config=task.config, args=task.args, result_type="error")
     except Exception:
         dbt.tracking.track_invocation_end(config=task.config, args=task.args, result_type="error")
@@ -222,7 +233,7 @@ def run_from_args(parsed):
     level_override = parsed.cls.pre_init_hook(parsed)
     setup_event_logger(log_path or "logs", level_override)
 
-    fire_event(MainReportVersion(v=str(dbt.version.installed)))
+    fire_event(MainReportVersion(version=str(dbt.version.installed), log_version=LOG_VERSION))
     fire_event(MainReportArgs(args=args_to_dict(parsed)))
 
     if dbt.tracking.active_user is not None:  # mypy appeasement, always true
@@ -254,10 +265,8 @@ def _build_base_subparser():
         dest="sub_profiles_dir",  # Main cli arg precedes subcommand
         type=str,
         help="""
-        Which directory to look in for the profiles.yml file. Default = {}
-        """.format(
-            DEFAULT_PROFILES_DIR
-        ),
+        Which directory to look in for the profiles.yml file. If not set, dbt will look in the current working directory first, then HOME/.dbt/
+        """,
     )
 
     base_subparser.add_argument(
@@ -533,7 +542,7 @@ def _build_parse_subparser(subparsers, base_subparser):
         "parse",
         parents=[base_subparser],
         help="""
-        Parsed the project and provides information on performance
+        Parses the project and provides information on performance
         """,
     )
     sub.set_defaults(cls=parse_task.ParseTask, which="parse", rpc_method="parse")
@@ -557,6 +566,7 @@ def _build_docs_generate_subparser(subparsers, base_subparser):
         Do not run "dbt compile" as part of docs generation
         """,
     )
+    _add_defer_argument(generate_sub)
     return generate_sub
 
 
@@ -615,6 +625,7 @@ def _add_table_mutability_arguments(*subparsers):
     for sub in subparsers:
         sub.add_argument(
             "--full-refresh",
+            "-f",
             action="store_true",
             help="""
             If specified, dbt will drop incremental models and
@@ -647,6 +658,22 @@ def _add_common_arguments(*subparsers):
             settings in profiles.yml.
             """,
         )
+        sub.add_argument(
+            "--target-path",
+            required=False,
+            help="""
+            Configure the 'target-path'. Only applies this setting for the
+            current run. Overrides the 'DBT_TARGET_PATH' if it is set.
+            """,
+        )
+        sub.add_argument(
+            "--log-path",
+            required=False,
+            help="""
+            Configure the 'log-path'. Only applies this setting for the
+            current run. Overrides the 'DBT_LOG_PATH' if it is set.
+            """,
+        )
         _add_version_check(sub)
 
 
@@ -660,6 +687,7 @@ def _build_seed_subparser(subparsers, base_subparser):
     )
     seed_sub.add_argument(
         "--full-refresh",
+        "-f",
         action="store_true",
         help="""
         Drop existing seed tables and recreate them
@@ -1038,10 +1066,8 @@ def parse_args(args, cls=DBTArgumentParser):
         dest="profiles_dir",
         type=str,
         help="""
-        Which directory to look in for the profiles.yml file. Default = {}
-        """.format(
-            DEFAULT_PROFILES_DIR
-        ),
+        Which directory to look in for the profiles.yml file. If not set, dbt will look in the current working directory first, then HOME/.dbt/
+        """,
     )
 
     p.add_argument(
@@ -1084,6 +1110,36 @@ def parse_args(args, cls=DBTArgumentParser):
         """,
     )
 
+    p.add_argument(
+        "--no-print",
+        action="store_true",
+        default=None,
+        help="""
+        Suppress all {{ print() }} macro calls.
+        """,
+    )
+
+    schema_cache_flag = p.add_mutually_exclusive_group()
+    schema_cache_flag.add_argument(
+        "--cache-selected-only",
+        action="store_const",
+        const=True,
+        default=None,
+        dest="cache_selected_only",
+        help="""
+        Pre cache database objects relevant to selected resource only.
+        """,
+    )
+    schema_cache_flag.add_argument(
+        "--no-cache-selected-only",
+        action="store_const",
+        const=False,
+        dest="cache_selected_only",
+        help="""
+        Pre cache all database objects related to the project.
+        """,
+    )
+
     subs = p.add_subparsers(title="Available sub-commands")
 
     base_subparser = _build_base_subparser()
@@ -1116,7 +1172,7 @@ def parse_args(args, cls=DBTArgumentParser):
     # list_sub sets up its own arguments.
     _add_selection_arguments(run_sub, compile_sub, generate_sub, test_sub, snapshot_sub, seed_sub)
     # --defer
-    _add_defer_argument(run_sub, test_sub, build_sub, snapshot_sub)
+    _add_defer_argument(run_sub, test_sub, build_sub, snapshot_sub, compile_sub)
     # --full-refresh
     _add_table_mutability_arguments(run_sub, compile_sub, build_sub)
 

@@ -13,35 +13,22 @@ from typing import Optional, List, ContextManager, Callable, Dict, Any, Set
 
 import colorama
 import logbook
+from dbt.constants import SECRET_ENV_PREFIX
 from dbt.dataclass_schema import dbtClassMixin
 
-# Colorama needs some help on windows because we're using logger.info
-# intead of print(). If the Windows env doesn't have a TERM var set,
-# then we should override the logging stream to use the colorama
-# converter. If the TERM var is set (as with Git Bash), then it's safe
-# to send escape characters and no log handler injection is needed.
-colorama_stdout = sys.stdout
-colorama_wrap = True
+# Colorama is needed for colored logs on Windows because we're using logger.info
+# intead of print(). If the Windows env doesn't have a TERM var set or it is set to None
+# (i.e. in the case of Git Bash on Windows- this emulates Unix), then it's safe to initialize
+# Colorama with wrapping turned on which allows us to strip ANSI sequences from stdout.
+# You can safely initialize Colorama for any OS and the coloring stays the same except
+# when piped to anoter process for Linux and MacOS, then it loses the coloring. To combat
+# that, we will just initialize Colorama when needed on Windows using a non-Unix terminal.
 
-colorama.init(wrap=colorama_wrap)
-
-
-if sys.platform == "win32" and not os.getenv("TERM"):
-    colorama_wrap = False
-    colorama_stdout = colorama.AnsiToWin32(sys.stdout).stream
-
-elif sys.platform == "win32":
-    colorama_wrap = False
-
-colorama.init(wrap=colorama_wrap)
-
+if sys.platform == "win32" and (not os.getenv("TERM") or os.getenv("TERM") == "None"):
+    colorama.init(wrap=True)
 
 STDOUT_LOG_FORMAT = "{record.message}"
-DEBUG_LOG_FORMAT = (
-    "{record.time:%Y-%m-%d %H:%M:%S.%f%z} " "({record.thread_name}): " "{record.message}"
-)
-
-SECRET_ENV_PREFIX = "DBT_ENV_SECRET_"
+DEBUG_LOG_FORMAT = "{record.time:%Y-%m-%d %H:%M:%S.%f%z} ({record.thread_name}): {record.message}"
 
 
 def get_secret_env() -> List[str]:
@@ -464,7 +451,7 @@ class DelayedFileHandler(logbook.RotatingFileHandler, FormatterMixin):
 
 
 class LogManager(logbook.NestedSetup):
-    def __init__(self, stdout=colorama_stdout, stderr=sys.stderr):
+    def __init__(self, stdout=sys.stdout, stderr=sys.stderr):
         self.stdout = stdout
         self.stderr = stderr
         self._null_handler = logbook.NullHandler()
@@ -632,7 +619,7 @@ def list_handler(
     lst: Optional[List[LogMessage]],
     level=logbook.NOTSET,
 ) -> ContextManager:
-    """Return a context manager that temporarly attaches a list to the logger."""
+    """Return a context manager that temporarily attaches a list to the logger."""
     return ListLogHandler(lst=lst, level=level, bubble=True)
 
 

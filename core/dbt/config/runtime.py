@@ -1,33 +1,43 @@
 import itertools
 import os
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional, Mapping, Iterator, Iterable, Tuple, List, MutableSet, Type
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    Mapping,
+    MutableSet,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+)
 
-from .profile import Profile
-from .project import Project
-from .renderer import DbtProjectYamlRenderer, ProfileRenderer
-from .utils import parse_cli_vars
 from dbt import flags
-from dbt.adapters.factory import get_relation_class_by_name, get_include_paths
-from dbt.helper_types import FQNPath, PathSet
+from dbt.adapters.factory import get_include_paths, get_relation_class_by_name
 from dbt.config.profile import read_user_config
 from dbt.contracts.connection import AdapterRequiredConfig, Credentials
 from dbt.contracts.graph.manifest import ManifestMetadata
-from dbt.contracts.relation import ComponentName
-from dbt.ui import warning_tag
-
 from dbt.contracts.project import Configuration, UserConfig
-from dbt.exceptions import (
-    RuntimeException,
-    DbtProjectError,
-    validator_error_message,
-    warn_or_error,
-    raise_compiler_error,
-)
-
+from dbt.contracts.relation import ComponentName
 from dbt.dataclass_schema import ValidationError
+from dbt.exceptions import (
+    DbtProjectError,
+    RuntimeException,
+    raise_compiler_error,
+    validator_error_message,
+)
+from dbt.events.functions import warn_or_error
+from dbt.events.types import UnusedResourceConfigPath
+from dbt.helper_types import DictDefaultEmptyStr, FQNPath, PathSet
+
+from .profile import Profile
+from .project import Project, PartialProject
+from .renderer import DbtProjectYamlRenderer, ProfileRenderer
+from .utils import parse_cli_vars
 
 
 def _project_quoting_dict(proj: Project, profile: Profile) -> Dict[ComponentName, bool]:
@@ -105,6 +115,8 @@ class RuntimeConfig(Project, Profile, AdapterRequiredConfig):
             query_comment=project.query_comment,
             sources=project.sources,
             tests=project.tests,
+            metrics=project.metrics,
+            exposures=project.exposures,
             vars=project.vars,
             config_version=project.config_version,
             unrendered=project.unrendered,
@@ -188,28 +200,52 @@ class RuntimeConfig(Project, Profile, AdapterRequiredConfig):
 
     @classmethod
     def collect_parts(cls: Type["RuntimeConfig"], args: Any) -> Tuple[Project, Profile]:
-        # profile_name from the project
-        project_root = args.project_dir if args.project_dir else os.getcwd()
-        version_check = bool(flags.VERSION_CHECK)
-        partial = Project.partial_load(project_root, verify_version=version_check)
 
-        # build the profile using the base renderer and the one fact we know
-        # Note: only the named profile section is rendered. The rest of the
-        # profile is ignored.
+        cli_vars: Dict[str, Any] = parse_cli_vars(getattr(args, "vars", "{}"))
+
+        profile = cls.collect_profile(args=args)
+        project_renderer = DbtProjectYamlRenderer(profile, cli_vars)
+        project = cls.collect_project(args=args, project_renderer=project_renderer)
+        assert type(project) is Project
+        return (project, profile)
+
+    @classmethod
+    def collect_profile(
+        cls: Type["RuntimeConfig"], args: Any, profile_name: Optional[str] = None
+    ) -> Profile:
+
         cli_vars: Dict[str, Any] = parse_cli_vars(getattr(args, "vars", "{}"))
         profile_renderer = ProfileRenderer(cli_vars)
-        profile_name = partial.render_profile_name(profile_renderer)
+
+        # build the profile using the base renderer and the one fact we know
+        if profile_name is None:
+            # Note: only the named profile section is rendered here. The rest of the
+            # profile is ignored.
+            partial = cls.collect_project(args)
+            assert type(partial) is PartialProject
+            profile_name = partial.render_profile_name(profile_renderer)
+
         profile = cls._get_rendered_profile(args, profile_renderer, profile_name)
         # Save env_vars encountered in rendering for partial parsing
         profile.profile_env_vars = profile_renderer.ctx_obj.env_vars
+        return profile
 
-        # get a new renderer using our target information and render the
-        # project
-        project_renderer = DbtProjectYamlRenderer(profile, cli_vars)
-        project = partial.render(project_renderer)
-        # Save env_vars encountered in rendering for partial parsing
-        project.project_env_vars = project_renderer.ctx_obj.env_vars
-        return (project, profile)
+    @classmethod
+    def collect_project(
+        cls: Type["RuntimeConfig"],
+        args: Any,
+        project_renderer: Optional[DbtProjectYamlRenderer] = None,
+    ) -> Union[Project, PartialProject]:
+
+        project_root = args.project_dir if args.project_dir else os.getcwd()
+        version_check = bool(flags.VERSION_CHECK)
+        partial = Project.partial_load(project_root, verify_version=version_check)
+        if project_renderer is None:
+            return partial
+        else:
+            project = partial.render(project_renderer)
+            project.project_env_vars = project_renderer.ctx_obj.env_vars
+            return project
 
     # Called in main.py, lib.py, task/base.py
     @classmethod
@@ -274,13 +310,15 @@ class RuntimeConfig(Project, Profile, AdapterRequiredConfig):
             "snapshots": self._get_config_paths(self.snapshots),
             "sources": self._get_config_paths(self.sources),
             "tests": self._get_config_paths(self.tests),
+            "metrics": self._get_config_paths(self.metrics),
+            "exposures": self._get_config_paths(self.exposures),
         }
 
-    def get_unused_resource_config_paths(
+    def warn_for_unused_resource_config_paths(
         self,
         resource_fqns: Mapping[str, PathSet],
         disabled: PathSet,
-    ) -> List[FQNPath]:
+    ) -> None:
         """Return a list of lists of strings, where each inner list of strings
         represents a type + FQN path of a resource configuration that is not
         used.
@@ -294,40 +332,34 @@ class RuntimeConfig(Project, Profile, AdapterRequiredConfig):
 
             for config_path in config_paths:
                 if not _is_config_used(config_path, fqns):
-                    unused_resource_config_paths.append((resource_type,) + config_path)
-        return unused_resource_config_paths
+                    resource_path = ".".join(i for i in ((resource_type,) + config_path))
+                    unused_resource_config_paths.append(resource_path)
 
-    def warn_for_unused_resource_config_paths(
-        self,
-        resource_fqns: Mapping[str, PathSet],
-        disabled: PathSet,
-    ) -> None:
-        unused = self.get_unused_resource_config_paths(resource_fqns, disabled)
-        if len(unused) == 0:
+        if len(unused_resource_config_paths) == 0:
             return
 
-        msg = UNUSED_RESOURCE_CONFIGURATION_PATH_MESSAGE.format(
-            len(unused), "\n".join("- {}".format(".".join(u)) for u in unused)
-        )
+        warn_or_error(UnusedResourceConfigPath(unused_config_paths=unused_resource_config_paths))
 
-        warn_or_error(msg, log_fmt=warning_tag("{}"))
-
-    def load_dependencies(self) -> Mapping[str, "RuntimeConfig"]:
+    def load_dependencies(self, base_only=False) -> Mapping[str, "RuntimeConfig"]:
         if self.dependencies is None:
             all_projects = {self.project_name: self}
             internal_packages = get_include_paths(self.credentials.type)
-            # raise exception if fewer installed packages than in packages.yml
-            count_packages_specified = len(self.packages.packages)  # type: ignore
-            count_packages_installed = len(tuple(self._get_project_directories()))
-            if count_packages_specified > count_packages_installed:
-                raise_compiler_error(
-                    f"dbt found {count_packages_specified} package(s) "
-                    f"specified in packages.yml, but only "
-                    f"{count_packages_installed} package(s) installed "
-                    f'in {self.packages_install_path}. Run "dbt deps" to '
-                    f"install package dependencies."
-                )
-            project_paths = itertools.chain(internal_packages, self._get_project_directories())
+            if base_only:
+                # Test setup -- we want to load macros without dependencies
+                project_paths = itertools.chain(internal_packages)
+            else:
+                # raise exception if fewer installed packages than in packages.yml
+                count_packages_specified = len(self.packages.packages)  # type: ignore
+                count_packages_installed = len(tuple(self._get_project_directories()))
+                if count_packages_specified > count_packages_installed:
+                    raise_compiler_error(
+                        f"dbt found {count_packages_specified} package(s) "
+                        f"specified in packages.yml, but only "
+                        f"{count_packages_installed} package(s) installed "
+                        f'in {self.packages_install_path}. Run "dbt deps" to '
+                        f"install package dependencies."
+                    )
+                project_paths = itertools.chain(internal_packages, self._get_project_directories())
             for project_name, project in self.load_projects(project_paths):
                 if project_name in all_projects:
                     raise_compiler_error(
@@ -396,7 +428,7 @@ class UnsetProfile(Profile):
         self.threads = -1
 
     def to_target_dict(self):
-        return {}
+        return DictDefaultEmptyStr({})
 
     def __getattribute__(self, name):
         if name in {"profile_name", "target_name", "threads"}:
@@ -412,6 +444,9 @@ class UnsetProfileConfig(RuntimeConfig):
     """This class acts a lot _like_ a RuntimeConfig, except if your profile is
     missing, any access to profile members results in an exception.
     """
+
+    profile_name: str = field(repr=False)
+    target_name: str = field(repr=False)
 
     def __post_init__(self):
         # instead of futzing with InitVar overrides or rewriting __init__, just
@@ -431,7 +466,59 @@ class UnsetProfileConfig(RuntimeConfig):
 
     def to_target_dict(self):
         # re-override the poisoned profile behavior
-        return {}
+        return DictDefaultEmptyStr({})
+
+    def to_project_config(self, with_packages=False):
+        """Return a dict representation of the config that could be written to
+        disk with `yaml.safe_dump` to get this configuration.
+
+        Overrides dbt.config.Project.to_project_config to omit undefined profile
+        attributes.
+
+        :param with_packages bool: If True, include the serialized packages
+            file in the root.
+        :returns dict: The serialized profile.
+        """
+        result = deepcopy(
+            {
+                "name": self.project_name,
+                "version": self.version,
+                "project-root": self.project_root,
+                "profile": "",
+                "model-paths": self.model_paths,
+                "macro-paths": self.macro_paths,
+                "seed-paths": self.seed_paths,
+                "test-paths": self.test_paths,
+                "analysis-paths": self.analysis_paths,
+                "docs-paths": self.docs_paths,
+                "asset-paths": self.asset_paths,
+                "target-path": self.target_path,
+                "snapshot-paths": self.snapshot_paths,
+                "clean-targets": self.clean_targets,
+                "log-path": self.log_path,
+                "quoting": self.quoting,
+                "models": self.models,
+                "on-run-start": self.on_run_start,
+                "on-run-end": self.on_run_end,
+                "dispatch": self.dispatch,
+                "seeds": self.seeds,
+                "snapshots": self.snapshots,
+                "sources": self.sources,
+                "tests": self.tests,
+                "metrics": self.metrics,
+                "exposures": self.exposures,
+                "vars": self.vars.to_dict(),
+                "require-dbt-version": [v.to_version_string() for v in self.dbt_version],
+                "config-version": self.config_version,
+            }
+        )
+        if self.query_comment:
+            result["query-comment"] = self.query_comment.to_dict(omit_none=True)
+
+        if with_packages:
+            result.update(self.packages.to_dict(omit_none=True))
+
+        return result
 
     @classmethod
     def from_parts(
@@ -480,6 +567,8 @@ class UnsetProfileConfig(RuntimeConfig):
             query_comment=project.query_comment,
             sources=project.sources,
             tests=project.tests,
+            metrics=project.metrics,
+            exposures=project.exposures,
             vars=project.vars,
             config_version=project.config_version,
             unrendered=project.unrendered,
@@ -524,14 +613,6 @@ class UnsetProfileConfig(RuntimeConfig):
         project, profile = cls.collect_parts(args)
 
         return cls.from_parts(project=project, profile=profile, args=args)
-
-
-UNUSED_RESOURCE_CONFIGURATION_PATH_MESSAGE = """\
-Configuration paths exist in your dbt_project.yml file which do not \
-apply to any resources.
-There are {} unused configuration paths:
-{}
-"""
 
 
 def _is_config_used(path, fqns):

@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 from typing import Optional
 
 import yaml
@@ -14,7 +15,7 @@ from dbt import flags
 from dbt.version import _get_adapter_plugin_names
 from dbt.adapters.factory import load_plugin, get_include_paths
 
-from dbt.contracts.project import Name as ProjectName
+from dbt.contracts.util import Identifier as ProjectName
 
 from dbt.events.functions import fire_event
 from dbt.events.types import (
@@ -27,10 +28,12 @@ from dbt.events.types import (
     SettingUpProfile,
     InvalidProfileTemplateYAML,
     ProjectNameAlreadyExists,
-    GetAddendum,
+    ProjectCreated,
 )
 
 from dbt.include.starter_project import PACKAGE_PATH as starter_project_directory
+
+from dbt.include.global_project import PROJECT_NAME as GLOBAL_PROJECT_NAME
 
 from dbt.task.base import BaseTask, move_to_nearest_project_dir
 
@@ -40,22 +43,6 @@ SLACK_URL = "https://community.getdbt.com/"
 # This file is not needed for the starter project but exists for finding the resource path
 IGNORE_FILES = ["__init__.py", "__pycache__"]
 
-ON_COMPLETE_MESSAGE = """
-Your new dbt project "{project_name}" was created!
-
-For more information on how to configure the profiles.yml file,
-please consult the dbt documentation here:
-
-  {docs_url}
-
-One more thing:
-
-Need help? Don't hesitate to reach out to us via GitHub issues or on Slack:
-
-  {slack_url}
-
-Happy modeling!
-"""
 
 # https://click.palletsprojects.com/en/8.0.x/api/#types
 # click v7.0 has UNPROCESSED, STRING, INT, FLOAT, BOOL, and UUID available.
@@ -112,17 +99,6 @@ class InitTask(BaseTask):
                 fire_event(
                     ProfileWrittenWithSample(name=profile_name, path=str(profiles_filepath))
                 )
-
-    def get_addendum(self, project_name: str, profiles_path: str) -> str:
-        open_cmd = dbt.clients.system.open_dir_cmd()
-
-        return ON_COMPLETE_MESSAGE.format(
-            open_cmd=open_cmd,
-            project_name=project_name,
-            profiles_path=profiles_path,
-            docs_url=DOCS_URL,
-            slack_url=SLACK_URL,
-        )
 
     def generate_target_from_input(self, profile_template: dict, target: dict = {}) -> dict:
         """Generate a target configuration from profile_template and user input."""
@@ -186,7 +162,8 @@ class InitTask(BaseTask):
         initial_target = profile_template.get("fixed", {})
         prompts = profile_template.get("prompts", {})
         target = self.generate_target_from_input(prompts, initial_target)
-        profile = {"outputs": {"dev": target}, "target": "dev"}
+        target_name = target.pop("target", "dev")
+        profile = {"outputs": {target_name: target}, "target": target_name}
         self.write_profile(profile, profile_name)
 
     def create_profile_from_target(self, adapter: str, profile_name: str):
@@ -256,7 +233,11 @@ class InitTask(BaseTask):
     def get_valid_project_name(self) -> str:
         """Returns a valid project name, either from CLI arg or user prompt."""
         name = self.args.project_name
-        while not ProjectName.is_valid(name):
+        internal_package_names = {GLOBAL_PROJECT_NAME}
+        available_adapters = list(_get_adapter_plugin_names())
+        for adapter_name in available_adapters:
+            internal_package_names.update(f"dbt_{adapter_name}")
+        while not ProjectName.is_valid(name) or name in internal_package_names:
             if name:
                 click.echo(name + " is not a valid project name.")
             name = click.prompt("Enter a name for your project (letters, digits, underscore)")
@@ -298,6 +279,10 @@ class InitTask(BaseTask):
 
         # When dbt init is run outside of an existing project,
         # create a new project and set up the user's profile.
+        available_adapters = list(_get_adapter_plugin_names())
+        if not len(available_adapters):
+            print("No adapters available. Go to https://docs.getdbt.com/docs/available-adapters")
+            sys.exit(1)
         project_name = self.get_valid_project_name()
         project_path = Path(project_name)
         if project_path.exists():
@@ -318,5 +303,10 @@ class InitTask(BaseTask):
                 return
             adapter = self.ask_for_adapter_choice()
             self.create_profile_from_target(adapter, profile_name=project_name)
-            msg = self.get_addendum(project_name, profiles_dir)
-            fire_event(GetAddendum(msg=msg))
+            fire_event(
+                ProjectCreated(
+                    project_name=project_name,
+                    docs_url=DOCS_URL,
+                    slack_url=SLACK_URL,
+                )
+            )

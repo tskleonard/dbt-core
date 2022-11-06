@@ -24,16 +24,17 @@ from .utils import (
 def basic_uncompiled_model():
     return CompiledModelNode(
         package_name='test',
-        root_path='/root/',
         path='/root/models/foo.sql',
         original_file_path='models/foo.sql',
-        raw_sql='select * from {{ ref("other") }}',
+        language='sql',
+        raw_code='select * from {{ ref("other") }}',
         name='foo',
         resource_type=NodeType.Model,
         unique_id='model.test.foo',
         fqn=['test', 'models', 'foo'],
         refs=[],
         sources=[],
+        metrics=[],
         depends_on=DependsOn(),
         deferred=False,
         description='',
@@ -55,16 +56,17 @@ def basic_uncompiled_model():
 def basic_compiled_model():
     return CompiledModelNode(
         package_name='test',
-        root_path='/root/',
         path='/root/models/foo.sql',
         original_file_path='models/foo.sql',
-        raw_sql='select * from {{ ref("other") }}',
+        language='sql',
+        raw_code='select * from {{ ref("other") }}',
         name='foo',
         resource_type=NodeType.Model,
         unique_id='model.test.foo',
         fqn=['test', 'models', 'foo'],
         refs=[],
         sources=[],
+        metrics=[],
         depends_on=DependsOn(),
         deferred=True,
         description='',
@@ -77,7 +79,7 @@ def basic_compiled_model():
         compiled=True,
         extra_ctes=[InjectedCTE('whatever', 'select * from other')],
         extra_ctes_injected=True,
-        compiled_sql='with whatever as (select * from other) select * from whatever',
+        compiled_code='with whatever as (select * from other) select * from whatever',
         checksum=FileHash.from_contents(''),
         unrendered_config={}
     )
@@ -87,13 +89,13 @@ def basic_compiled_model():
 def minimal_uncompiled_dict():
     return {
         'name': 'foo',
-        'root_path': '/root/',
         'created_at': 1,
         'resource_type': str(NodeType.Model),
         'path': '/root/models/foo.sql',
         'original_file_path': 'models/foo.sql',
         'package_name': 'test',
-        'raw_sql': 'select * from {{ ref("other") }}',
+        'language': 'sql',
+        'raw_code': 'select * from {{ ref("other") }}',
         'unique_id': 'model.test.foo',
         'fqn': ['test', 'models', 'foo'],
         'database': 'test_db',
@@ -109,17 +111,18 @@ def minimal_uncompiled_dict():
 def basic_uncompiled_dict():
     return {
         'name': 'foo',
-        'root_path': '/root/',
         'created_at': 1,
         'resource_type': str(NodeType.Model),
         'path': '/root/models/foo.sql',
         'original_file_path': 'models/foo.sql',
         'package_name': 'test',
-        'raw_sql': 'select * from {{ ref("other") }}',
+        'language': 'sql',
+        'raw_code': 'select * from {{ ref("other") }}',
         'unique_id': 'model.test.foo',
         'fqn': ['test', 'models', 'foo'],
         'refs': [],
         'sources': [],
+        'metrics': [],
         'depends_on': {'macros': [], 'nodes': []},
         'database': 'test_db',
         'deferred': False,
@@ -138,6 +141,8 @@ def basic_uncompiled_dict():
             'tags': [],
             'on_schema_change': 'ignore',
             'meta': {},
+            'grants': {},
+            'packages': [],
         },
         'docs': {'show': True},
         'columns': {},
@@ -146,7 +151,8 @@ def basic_uncompiled_dict():
         'extra_ctes': [],
         'extra_ctes_injected': False,
         'checksum': {'name': 'sha256', 'checksum': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'},
-        'unrendered_config': {}
+        'unrendered_config': {},
+        'config_call_dict': {},
     }
 
 
@@ -154,17 +160,18 @@ def basic_uncompiled_dict():
 def basic_compiled_dict():
     return {
         'name': 'foo',
-        'root_path': '/root/',
         'created_at': 1,
         'resource_type': str(NodeType.Model),
         'path': '/root/models/foo.sql',
         'original_file_path': 'models/foo.sql',
         'package_name': 'test',
-        'raw_sql': 'select * from {{ ref("other") }}',
+        'language':'sql',
+        'raw_code': 'select * from {{ ref("other") }}',
         'unique_id': 'model.test.foo',
         'fqn': ['test', 'models', 'foo'],
         'refs': [],
         'sources': [],
+        'metrics': [],
         'depends_on': {'macros': [], 'nodes': []},
         'database': 'test_db',
         'deferred': True,
@@ -183,6 +190,9 @@ def basic_compiled_dict():
             'tags': [],
             'on_schema_change': 'ignore',
             'meta': {},
+            'grants': {},
+            'packages': [],
+            'docs': {'show': True},
         },
         'docs': {'show': True},
         'columns': {},
@@ -190,12 +200,13 @@ def basic_compiled_dict():
         'compiled': True,
         'extra_ctes': [{'id': 'whatever', 'sql': 'select * from other'}],
         'extra_ctes_injected': True,
-        'compiled_sql': 'with whatever as (select * from other) select * from whatever',
+        'compiled_code': 'with whatever as (select * from other) select * from whatever',
         'checksum': {'name': 'sha256', 'checksum': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'},
-        'unrendered_config': {}
+        'unrendered_config': {},
+        'config_call_dict': {},
     }
 
-
+@pytest.mark.skip("Haven't found where we would use uncompiled node")
 def test_basic_uncompiled_model(minimal_uncompiled_dict, basic_uncompiled_dict, basic_uncompiled_model):
     node_dict = basic_uncompiled_dict
     node = basic_uncompiled_model
@@ -260,7 +271,7 @@ unchanged_compiled_models = [
 
 changed_compiled_models = [
     lambda u: (u, None),
-    lambda u: (u, u.replace(raw_sql='select * from wherever')),
+    lambda u: (u, u.replace(raw_code='select * from wherever')),
     lambda u: (u, u.replace(fqn=['test', 'models', 'subdir', 'foo'],
                             original_file_path='models/subdir/foo.sql', path='/root/models/subdir/foo.sql')),
     lambda u: (u, replace_config(u, full_refresh=True)),
@@ -312,13 +323,13 @@ def test_compare_changed_model(func, basic_uncompiled_model):
 def minimal_schema_test_dict():
     return {
         'name': 'foo',
-        'root_path': '/root/',
         'created_at': 1,
         'resource_type': str(NodeType.Test),
         'path': '/root/x/path.sql',
         'original_file_path': '/root/path.sql',
         'package_name': 'test',
-        'raw_sql': 'select * from {{ ref("other") }}',
+        'language': 'sql',
+        'raw_code': 'select * from {{ ref("other") }}',
         'unique_id': 'model.test.foo',
         'fqn': ['test', 'models', 'foo'],
         'database': 'test_db',
@@ -337,16 +348,17 @@ def minimal_schema_test_dict():
 def basic_uncompiled_schema_test_node():
     return CompiledGenericTestNode(
         package_name='test',
-        root_path='/root/',
         path='/root/x/path.sql',
         original_file_path='/root/path.sql',
-        raw_sql='select * from {{ ref("other") }}',
+        language='sql',
+        raw_code='select * from {{ ref("other") }}',
         name='foo',
         resource_type=NodeType.Test,
         unique_id='model.test.foo',
         fqn=['test', 'models', 'foo'],
         refs=[],
         sources=[],
+        metrics=[],
         deferred=False,
         depends_on=DependsOn(),
         description='',
@@ -369,16 +381,17 @@ def basic_uncompiled_schema_test_node():
 def basic_compiled_schema_test_node():
     return CompiledGenericTestNode(
         package_name='test',
-        root_path='/root/',
         path='/root/x/path.sql',
         original_file_path='/root/path.sql',
-        raw_sql='select * from {{ ref("other") }}',
+        language='sql',
+        raw_code='select * from {{ ref("other") }}',
         name='foo',
         resource_type=NodeType.Test,
         unique_id='model.test.foo',
         fqn=['test', 'models', 'foo'],
         refs=[],
         sources=[],
+        metrics=[],
         depends_on=DependsOn(),
         deferred=False,
         description='',
@@ -391,7 +404,7 @@ def basic_compiled_schema_test_node():
         compiled=True,
         extra_ctes=[InjectedCTE('whatever', 'select * from other')],
         extra_ctes_injected=True,
-        compiled_sql='with whatever as (select * from other) select * from whatever',
+        compiled_code='with whatever as (select * from other) select * from whatever',
         column_name='id',
         test_metadata=TestMetadata(namespace=None, name='foo', kwargs={}),
         checksum=FileHash.from_contents(''),
@@ -405,17 +418,18 @@ def basic_compiled_schema_test_node():
 def basic_uncompiled_schema_test_dict():
     return {
         'name': 'foo',
-        'root_path': '/root/',
         'created_at': 1,
         'resource_type': str(NodeType.Test),
         'path': '/root/x/path.sql',
         'original_file_path': '/root/path.sql',
         'package_name': 'test',
-        'raw_sql': 'select * from {{ ref("other") }}',
+        'language': 'sql',
+        'raw_code': 'select * from {{ ref("other") }}',
         'unique_id': 'model.test.foo',
         'fqn': ['test', 'models', 'foo'],
         'refs': [],
         'sources': [],
+        'metrics': [],
         'depends_on': {'macros': [], 'nodes': []},
         'database': 'test_db',
         'description': '',
@@ -445,7 +459,8 @@ def basic_uncompiled_schema_test_dict():
             'kwargs': {},
         },
         'checksum': {'name': 'sha256', 'checksum': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'},
-        'unrendered_config': {}
+        'unrendered_config': {},
+        'config_call_dict': {},
     }
 
 
@@ -453,17 +468,18 @@ def basic_uncompiled_schema_test_dict():
 def basic_compiled_schema_test_dict():
     return {
         'name': 'foo',
-        'root_path': '/root/',
         'created_at': 1,
         'resource_type': str(NodeType.Test),
         'path': '/root/x/path.sql',
         'original_file_path': '/root/path.sql',
         'package_name': 'test',
-        'raw_sql': 'select * from {{ ref("other") }}',
+        'language': 'sql',
+        'raw_code': 'select * from {{ ref("other") }}',
         'unique_id': 'model.test.foo',
         'fqn': ['test', 'models', 'foo'],
         'refs': [],
         'sources': [],
+        'metrics': [],
         'depends_on': {'macros': [], 'nodes': []},
         'deferred': False,
         'database': 'test_db',
@@ -488,7 +504,7 @@ def basic_compiled_schema_test_dict():
         'compiled': True,
         'extra_ctes': [{'id': 'whatever', 'sql': 'select * from other'}],
         'extra_ctes_injected': True,
-        'compiled_sql': 'with whatever as (select * from other) select * from whatever',
+        'compiled_code': 'with whatever as (select * from other) select * from whatever',
         'column_name': 'id',
         'test_metadata': {
             'name': 'foo',
@@ -497,15 +513,15 @@ def basic_compiled_schema_test_dict():
         'checksum': {'name': 'sha256', 'checksum': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'},
         'unrendered_config': {
             'severity': 'warn',
-        }
+        },
+        'config_call_dict': {},
     }
 
-
+@pytest.mark.skip("Haven't found where we would use uncompiled node")
 def test_basic_uncompiled_schema_test(basic_uncompiled_schema_test_node, basic_uncompiled_schema_test_dict, minimal_schema_test_dict):
     node = basic_uncompiled_schema_test_node
     node_dict = basic_uncompiled_schema_test_dict
     minimum = minimal_schema_test_dict
-
     assert_symmetric(node, node_dict, CompiledGenericTestNode)
     assert node.empty is False
     assert node.is_refable is False
@@ -537,8 +553,8 @@ def test_invalid_resource_type_schema_test(minimal_schema_test_dict):
 
 
 unchanged_schema_tests = [
-    # for tests, raw_sql isn't a change (because it's always the same for a given test macro)
-    lambda u: u.replace(raw_sql='select * from wherever'),
+    # for tests, raw_code isn't a change (because it's always the same for a given test macro)
+    lambda u: u.replace(raw_code='select * from wherever'),
     lambda u: u.replace(description='a description'),
     lambda u: u.replace(tags=['mytag']),
     lambda u: u.replace(meta={'cool_key': 'cool value'}),

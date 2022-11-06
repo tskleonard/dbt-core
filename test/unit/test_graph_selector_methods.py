@@ -1,4 +1,5 @@
 import copy
+
 import pytest
 from unittest import mock
 
@@ -22,7 +23,7 @@ from dbt.contracts.graph.parsed import (
     ColumnInfo,
 )
 from dbt.contracts.graph.manifest import Manifest
-from dbt.contracts.graph.unparsed import ExposureType, ExposureOwner, MetricFilter
+from dbt.contracts.graph.unparsed import ExposureType, ExposureOwner, MetricFilter,MetricTime
 from dbt.contracts.state import PreviousState
 from dbt.node_types import NodeType
 from dbt.graph.selector_methods import (
@@ -31,6 +32,7 @@ from dbt.graph.selector_methods import (
     TagSelectorMethod,
     SourceSelectorMethod,
     PathSelectorMethod,
+    FileSelectorMethod,
     PackageSelectorMethod,
     ConfigSelectorMethod,
     TestNameSelectorMethod,
@@ -44,7 +46,7 @@ import dbt.contracts.graph.parsed
 from .utils import replace_config
 
 
-def make_model(pkg, name, sql, refs=None, sources=None, tags=None, path=None, alias=None, config_kwargs=None, fqn_extras=None):
+def make_model(pkg, name, sql, refs=None, sources=None, tags=None, path=None, alias=None, config_kwargs=None, fqn_extras=None, depends_on_macros=None):
     if refs is None:
         refs = []
     if sources is None:
@@ -57,6 +59,8 @@ def make_model(pkg, name, sql, refs=None, sources=None, tags=None, path=None, al
         alias = name
     if config_kwargs is None:
         config_kwargs = {}
+    if depends_on_macros is None:
+        depends_on_macros = []
 
     if fqn_extras is None:
         fqn_extras = []
@@ -74,7 +78,8 @@ def make_model(pkg, name, sql, refs=None, sources=None, tags=None, path=None, al
         depends_on_nodes.append(src.unique_id)
 
     return ParsedModelNode(
-        raw_sql=sql,
+        language='sql',
+        raw_code=sql,
         database='dbt',
         schema='dbt_schema',
         alias=alias,
@@ -82,14 +87,16 @@ def make_model(pkg, name, sql, refs=None, sources=None, tags=None, path=None, al
         fqn=fqn,
         unique_id=f'model.{pkg}.{name}',
         package_name=pkg,
-        root_path='/usr/dbt/some-project',
         path=path,
         original_file_path=f'models/{path}',
         config=NodeConfig(**config_kwargs),
         tags=tags,
         refs=ref_values,
         sources=source_values,
-        depends_on=DependsOn(nodes=depends_on_nodes, macros=[]),
+        depends_on=DependsOn(
+            nodes=depends_on_nodes,
+            macros=depends_on_macros,
+        ),
         resource_type=NodeType.Model,
         checksum=FileHash.from_contents(''),
     )
@@ -111,7 +118,8 @@ def make_seed(pkg, name, path=None, loader=None, alias=None, tags=None, fqn_extr
 
     fqn = [pkg] + fqn_extras + [name]
     return ParsedSeedNode(
-        raw_sql='',
+        language='sql',
+        raw_code='',
         database='dbt',
         schema='dbt_schema',
         alias=alias,
@@ -119,7 +127,6 @@ def make_seed(pkg, name, path=None, loader=None, alias=None, tags=None, fqn_extr
         fqn=fqn,
         unique_id=f'seed.{pkg}.{name}',
         package_name=pkg,
-        root_path='/usr/dbt/some-project',
         path=path,
         original_file_path=f'data/{path}',
         tags=tags,
@@ -147,7 +154,6 @@ def make_source(pkg, source_name, table_name, path=None, loader=None, identifier
         schema='dbt_schema',
         unique_id=f'source.{pkg}.{source_name}.{table_name}',
         package_name=pkg,
-        root_path='/usr/dbt/some-project',
         path=path,
         original_file_path=path,
         name=table_name,
@@ -173,7 +179,6 @@ def make_macro(pkg, name, macro_sql, path=None, depends_on_macros=None):
         macro_sql=macro_sql,
         unique_id=f'macro.{pkg}.{name}',
         package_name=pkg,
-        root_path='/usr/dbt/some-project',
         path=path,
         original_file_path=path,
         resource_type=NodeType.Macro,
@@ -210,7 +215,7 @@ def make_schema_test(pkg, test_name, test_model, test_kwargs, path=None, refs=No
     if column_name is not None:
         args_name += '_' + column_name
     node_name = f'{test_name}_{args_name}'
-    raw_sql = '{{ config(severity="ERROR") }}{{ test_' + \
+    raw_code = '{{ config(severity="ERROR") }}{{ test_' + \
         test_name + '(**dbt_schema_test_kwargs) }}'
     name_parts = test_name.split('.')
 
@@ -243,7 +248,8 @@ def make_schema_test(pkg, test_name, test_model, test_kwargs, path=None, refs=No
         depends_on_nodes.append(source.unique_id)
 
     return ParsedGenericTestNode(
-        raw_sql=raw_sql,
+        language='sql',
+        raw_code=raw_code,
         test_metadata=TestMetadata(
             namespace=namespace,
             name=test_name,
@@ -256,7 +262,6 @@ def make_schema_test(pkg, test_name, test_model, test_kwargs, path=None, refs=No
         fqn=['minimal', 'schema_test', node_name],
         unique_id=f'test.{pkg}.{node_name}',
         package_name=pkg,
-        root_path='/usr/dbt/some-project',
         path=f'schema_test/{node_name}.sql',
         original_file_path=f'models/{path}',
         resource_type=NodeType.Test,
@@ -299,7 +304,8 @@ def make_data_test(pkg, name, sql, refs=None, sources=None, tags=None, path=None
         depends_on_nodes.append(src.unique_id)
 
     return ParsedSingularTestNode(
-        raw_sql=sql,
+        language='sql',
+        raw_code=sql,
         database='dbt',
         schema='dbt_schema',
         name=name,
@@ -307,7 +313,6 @@ def make_data_test(pkg, name, sql, refs=None, sources=None, tags=None, path=None
         fqn=fqn,
         unique_id=f'test.{pkg}.{name}',
         package_name=pkg,
-        root_path='/usr/dbt/some-project',
         path=path,
         original_file_path=f'tests/{path}',
         config=TestConfig(**config_kwargs),
@@ -338,7 +343,6 @@ def make_exposure(pkg, name, path=None, fqn_extras=None, owner=None):
         unique_id=f'exposure.{pkg}.{name}',
         package_name=pkg,
         path=path,
-        root_path='/usr/src/app',
         original_file_path=path,
         owner=owner,
     )
@@ -352,15 +356,14 @@ def make_metric(pkg, name, path=None):
         name=name,
         path='schema.yml',
         package_name=pkg,
-        root_path='/usr/src/app',
         original_file_path=path,
         unique_id=f'metric.{pkg}.{name}',
         fqn=[pkg, 'metrics', name],
         label='New Customers',
         model='ref("multi")',
         description="New customers",
-        type='count',
-        sql="user_id",
+        calculation_method='count',
+        expression="user_id",
         timestamp="signup_date",
         time_grains=['day', 'week', 'month'],
         dimensions=['plan', 'country'],
@@ -369,6 +372,7 @@ def make_metric(pkg, name, path=None):
            value=True,
            operator="=",
         )],
+        window=MetricTime(),
         meta={'is_okr': True},
         tags=['okrs'],
     )
@@ -459,12 +463,44 @@ def table_model(ephemeral_model):
         'pkg',
         'table_model',
         'select * from {{ ref("ephemeral_model") }}',
-        config_kwargs={'materialized': 'table'},
+         config_kwargs={
+            'materialized': 'table',
+            'meta': {
+                # Other properties to test in test_select_config_meta
+                'string_property': 'some_string',
+                'truthy_bool_property': True,
+                'falsy_bool_property': False,
+                'list_property': ['some_value', True, False]
+            },
+        },
         refs=[ephemeral_model],
         tags=['uses_ephemeral'],
         path='subdirectory/table_model.sql'
     )
 
+@pytest.fixture
+def table_model_py(seed):
+    return make_model(
+        'pkg',
+        'table_model_py',
+        'select * from {{ ref("seed") }}',
+        config_kwargs={'materialized': 'table'},
+        refs=[seed],
+        tags=[],
+        path='subdirectory/table_model.py'
+    )
+
+@pytest.fixture
+def table_model_csv(seed):
+    return make_model(
+        'pkg',
+        'table_model_csv',
+        'select * from {{ ref("seed") }}',
+        config_kwargs={'materialized': 'table'},
+        refs=[seed],
+        tags=[],
+        path='subdirectory/table_model.csv'
+    )
 
 @pytest.fixture
 def ext_source():
@@ -526,7 +562,6 @@ def union_model(seed, ext_source):
         tags=['unions'],
     )
 
-
 @pytest.fixture
 def table_id_unique(table_model):
     return make_unique_test('pkg', table_model, 'id')
@@ -583,13 +618,12 @@ def namespaced_union_model(seed, ext_source):
         tags=['unions'],
     )
 
-
 @pytest.fixture
-def manifest(seed, source, ephemeral_model, view_model, table_model, ext_source, ext_model, union_model, ext_source_2, 
+def manifest(seed, source, ephemeral_model, view_model, table_model, table_model_py, table_model_csv, ext_source, ext_model, union_model, ext_source_2, 
     ext_source_other, ext_source_other_2, table_id_unique, table_id_not_null, view_id_unique, ext_source_id_unique, 
     view_test_nothing, namespaced_seed, namespace_model, namespaced_union_model, macro_test_unique, macro_default_test_unique,
     macro_test_not_null, macro_default_test_not_null):
-    nodes = [seed, ephemeral_model, view_model, table_model, union_model, ext_model,
+    nodes = [seed, ephemeral_model, view_model, table_model, table_model_py, table_model_csv, union_model, ext_model,
              table_id_unique, table_id_not_null, view_id_unique, ext_source_id_unique, view_test_nothing,
              namespaced_seed, namespace_model, namespaced_union_model]
     sources = [source, ext_source, ext_source_2,
@@ -627,7 +661,7 @@ def test_select_fqn(manifest):
     assert not search_manifest_using_method(manifest, method, 'ext.unions')
     # sources don't show up, because selection pretends they have no FQN. Should it?
     assert search_manifest_using_method(manifest, method, 'pkg') == {
-        'union_model', 'table_model', 'view_model', 'ephemeral_model', 'seed',
+        'union_model', 'table_model', 'table_model_py', 'table_model_csv', 'view_model', 'ephemeral_model', 'seed',
         'mynamespace.union_model', 'mynamespace.ephemeral_model', 'mynamespace.seed'}
     assert search_manifest_using_method(
         manifest, method, 'ext') == {'ext_model'}
@@ -698,13 +732,33 @@ def test_select_path(manifest):
         manifest, method, 'models/missing*')
 
 
+def test_select_file(manifest):
+    methods = MethodManager(manifest, None)
+    method = methods.get_method('file', [])
+    assert isinstance(method, FileSelectorMethod)
+    assert method.arguments == []
+
+    assert search_manifest_using_method(
+        manifest, method, 'table_model.sql') == {'table_model'}
+    assert search_manifest_using_method(
+        manifest, method, 'table_model.py') == {'table_model_py'}
+    assert search_manifest_using_method(
+        manifest, method, 'table_model.csv') == {'table_model_csv'}
+    assert search_manifest_using_method(
+        manifest, method, 'union_model.sql') == {'union_model', 'mynamespace.union_model'}
+    assert not search_manifest_using_method(
+        manifest, method, 'missing.sql')
+    assert not search_manifest_using_method(
+        manifest, method, 'missing.py')
+
+
 def test_select_package(manifest):
     methods = MethodManager(manifest, None)
     method = methods.get_method('package', [])
     assert isinstance(method, PackageSelectorMethod)
     assert method.arguments == []
 
-    assert search_manifest_using_method(manifest, method, 'pkg') == {'union_model', 'table_model', 'view_model', 'ephemeral_model',
+    assert search_manifest_using_method(manifest, method, 'pkg') == {'union_model', 'table_model', 'table_model_py', 'table_model_csv', 'view_model', 'ephemeral_model',
                                                                      'seed', 'raw.seed', 'unique_table_model_id', 'not_null_table_model_id', 'unique_view_model_id', 'view_test_nothing',
                                                                      'mynamespace.seed', 'mynamespace.ephemeral_model', 'mynamespace.union_model',
                                                                      }
@@ -723,8 +777,30 @@ def test_select_config_materialized(manifest):
     assert search_manifest_using_method(manifest, method, 'view') == {
         'view_model', 'ext_model'}
     assert search_manifest_using_method(manifest, method, 'table') == {
-        'table_model', 'union_model', 'mynamespace.union_model'}
+        'table_model', 'table_model_py', 'table_model_csv', 'union_model', 'mynamespace.union_model'}
 
+def test_select_config_meta(manifest):
+    methods = MethodManager(manifest, None)
+
+    string_method = methods.get_method('config', ['meta', 'string_property'])
+    assert search_manifest_using_method(manifest, string_method, 'some_string') == {'table_model'}
+    assert not search_manifest_using_method(manifest, string_method, 'other_string') == {'table_model'}
+
+    truthy_bool_method = methods.get_method('config', ['meta', 'truthy_bool_property'])
+    assert search_manifest_using_method(manifest, truthy_bool_method, 'true') == {'table_model'}
+    assert not search_manifest_using_method(manifest, truthy_bool_method, 'false') == {'table_model'}
+    assert not search_manifest_using_method(manifest, truthy_bool_method, 'other') == {'table_model'}
+
+    falsy_bool_method = methods.get_method('config', ['meta', 'falsy_bool_property'])
+    assert search_manifest_using_method(manifest, falsy_bool_method, 'false') == {'table_model'}
+    assert not search_manifest_using_method(manifest, falsy_bool_method, 'true') == {'table_model'}
+    assert not search_manifest_using_method(manifest, falsy_bool_method, 'other') == {'table_model'}
+
+    list_method = methods.get_method('config', ['meta', 'list_property'])
+    assert search_manifest_using_method(manifest, list_method, 'some_value') == {'table_model'}
+    assert search_manifest_using_method(manifest, list_method, 'true') == {'table_model'}
+    assert search_manifest_using_method(manifest, list_method, 'false') == {'table_model'}
+    assert not search_manifest_using_method(manifest, list_method, 'other') == {'table_model'}
 
 def test_select_test_name(manifest):
     methods = MethodManager(manifest, None)
@@ -782,13 +858,17 @@ def test_select_metric(manifest):
 @pytest.fixture
 def previous_state(manifest):
     writable = copy.deepcopy(manifest).writable_manifest()
-    state = PreviousState(Path('/path/does/not/exist'))
+    state = PreviousState(path=Path('/path/does/not/exist'),current_path=Path('/path/does/not/exist'))
     state.manifest = writable
     return state
 
 
 def add_node(manifest, node):
     manifest.nodes[node.unique_id] = node
+
+
+def add_macro(manifest, macro):
+    manifest.macros[macro.unique_id] = macro
 
 
 def change_node(manifest, node, change=None):
@@ -840,7 +920,7 @@ def test_select_state_added_model(manifest, previous_state):
 
 
 def test_select_state_changed_model_sql(manifest, previous_state, view_model):
-    change_node(manifest, view_model.replace(raw_sql='select 1 as id'))
+    change_node(manifest, view_model.replace(raw_code='select 1 as id'))
     method = statemethod(manifest, previous_state)
     
     # both of these
@@ -893,7 +973,9 @@ def test_select_state_changed_seed_checksum_path_to_path(manifest, previous_stat
     with mock.patch('dbt.contracts.graph.parsed.warn_or_error') as warn_or_error_patch:
         assert not search_manifest_using_method(manifest, method, 'modified')
         warn_or_error_patch.assert_called_once()
-        msg = warn_or_error_patch.call_args[0][0]
+        event = warn_or_error_patch.call_args[0][0]
+        assert event.info.name == 'SeedExceedsLimitSamePath'
+        msg = event.info.msg
         assert msg.startswith('Found a seed (pkg.seed) >1MB in size')
     with mock.patch('dbt.contracts.graph.parsed.warn_or_error') as warn_or_error_patch:
         assert not search_manifest_using_method(manifest, method, 'new')
@@ -908,7 +990,9 @@ def test_select_state_changed_seed_checksum_sha_to_path(manifest, previous_state
         assert search_manifest_using_method(
             manifest, method, 'modified') == {'seed'}
         warn_or_error_patch.assert_called_once()
-        msg = warn_or_error_patch.call_args[0][0]
+        event = warn_or_error_patch.call_args[0][0]
+        assert event.info.name == 'SeedIncreased'
+        msg = event.info.msg
         assert msg.startswith('Found a seed (pkg.seed) >1MB in size')
     with mock.patch('dbt.contracts.graph.parsed.warn_or_error') as warn_or_error_patch:
         assert not search_manifest_using_method(manifest, method, 'new')
@@ -1034,4 +1118,66 @@ def test_select_state_changed_test_macro_sql(manifest, previous_state, macro_def
         manifest, method, 'modified') == {'not_null_table_model_id'}
     assert search_manifest_using_method(
         manifest, method, 'modified.macros') == {'not_null_table_model_id'}
+    assert not search_manifest_using_method(manifest, method, 'new')
+
+def test_select_state_changed_test_macros(manifest, previous_state):
+    changed_macro = make_macro('dbt', 'changed_macro', 'blablabla')
+    add_macro(manifest, changed_macro)
+    add_macro(previous_state.manifest, changed_macro.replace(macro_sql='something different'))
+
+    unchanged_macro = make_macro('dbt', 'unchanged_macro', 'blablabla')
+    add_macro(manifest, unchanged_macro)
+    add_macro(previous_state.manifest, unchanged_macro)
+
+    model1 = make_model('dbt', 'model1', 'blablabla',
+            depends_on_macros=[changed_macro.unique_id, unchanged_macro.unique_id])
+    add_node(manifest, model1)
+    add_node(previous_state.manifest, model1)
+
+    model2 = make_model('dbt', 'model2', 'blablabla',
+            depends_on_macros=[unchanged_macro.unique_id, changed_macro.unique_id])
+    add_node(manifest, model2)
+    add_node(previous_state.manifest, model2)
+
+    method = statemethod(manifest, previous_state)
+
+    assert search_manifest_using_method(
+        manifest, method, 'modified') == {'model1', 'model2'}
+    assert search_manifest_using_method(
+        manifest, method, 'modified.macros') == {'model1', 'model2'}
+    assert not search_manifest_using_method(manifest, method, 'new')
+
+def test_select_state_changed_test_macros_with_upstream_change(manifest, previous_state):
+    changed_macro = make_macro('dbt', 'changed_macro', 'blablabla')
+    add_macro(manifest, changed_macro)
+    add_macro(previous_state.manifest, changed_macro.replace(macro_sql='something different'))
+
+    unchanged_macro1 = make_macro('dbt', 'unchanged_macro', 'blablabla')
+    add_macro(manifest, unchanged_macro1)
+    add_macro(previous_state.manifest, unchanged_macro1)
+
+    unchanged_macro2 = make_macro('dbt', 'unchanged_macro', 'blablabla', depends_on_macros=[unchanged_macro1.unique_id, changed_macro.unique_id])
+    add_macro(manifest, unchanged_macro2)
+    add_macro(previous_state.manifest, unchanged_macro2)
+
+    unchanged_macro3 = make_macro('dbt', 'unchanged_macro', 'blablabla', depends_on_macros=[changed_macro.unique_id, unchanged_macro1.unique_id])
+    add_macro(manifest, unchanged_macro3)
+    add_macro(previous_state.manifest, unchanged_macro3)
+
+    model1 = make_model('dbt', 'model1', 'blablabla',
+            depends_on_macros=[unchanged_macro1.unique_id])
+    add_node(manifest, model1)
+    add_node(previous_state.manifest, model1)
+
+    model2 = make_model('dbt', 'model2', 'blablabla',
+            depends_on_macros=[unchanged_macro3.unique_id])
+    add_node(manifest, model2)
+    add_node(previous_state.manifest, model2)
+
+    method = statemethod(manifest, previous_state)
+
+    assert search_manifest_using_method(
+        manifest, method, 'modified') == {'model1', 'model2'}
+    assert search_manifest_using_method(
+        manifest, method, 'modified.macros') == {'model1', 'model2'}
     assert not search_manifest_using_method(manifest, method, 'new')
