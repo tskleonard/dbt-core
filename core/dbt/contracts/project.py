@@ -51,15 +51,15 @@ class LocalPackage(Package):
     local: str
 
 
+# `float` also allows `int`, according to PEP484 (and jsonschema!)
+RawVersion = Union[str, float]
+
+
 @dataclass
 class TarballPackage(Package):
     tarball: str
-    subdirectory: Optional[str] = None
-    sha1: Optional[str] = None
-
-
-# `float` also allows `int`, according to PEP484 (and jsonschema!)
-RawVersion = Union[str, float]
+    name: str
+    version: Optional[RawVersion] = None
 
 
 @dataclass
