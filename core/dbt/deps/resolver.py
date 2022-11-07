@@ -78,9 +78,7 @@ class PackageListing:
             elif isinstance(contract, RegistryPackage):
                 pkg = RegistryUnpinnedPackage.from_contract(contract)
             else:
-                raise InternalException(
-                    "Invalid package type {}".format(type(contract))
-                )
+                raise InternalException("Invalid package type {}".format(type(contract)))
             self.incorporate(pkg)
 
     @classmethod

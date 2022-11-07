@@ -1,23 +1,20 @@
-import os
-import functools
 from typing import List
 
 from dbt import semver
 from dbt import flags
 from dbt.version import get_installed_version
-from dbt.clients import registry, system
+from dbt.clients import registry
 from dbt.contracts.project import (
     RegistryPackageMetadata,
     RegistryPackage,
 )
-from dbt.deps.base import PinnedPackage, UnpinnedPackage, get_downloads_path
+from dbt.deps.base import PinnedPackage, UnpinnedPackage
 from dbt.exceptions import (
     package_version_not_found,
     VersionsNotCompatibleException,
     DependencyException,
     package_not_found,
 )
-from dbt.utils import _connection_exception_retry as connection_exception_retry
 
 
 class RegistryPackageMixin:

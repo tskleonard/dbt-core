@@ -83,9 +83,7 @@ class DepsTask(BaseTask):
                     else:
                         fire_event(DepsUpToDate())
                 if package.get_subdirectory():
-                    fire_event(
-                        DepsListSubdirectory(subdirectory=package.get_subdirectory())
-                    )
+                    fire_event(DepsListSubdirectory(subdirectory=package.get_subdirectory()))
 
                 self.track_package_install(
                     package_name=package_name, source_type=source_type, version=version

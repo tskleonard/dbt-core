@@ -1,11 +1,7 @@
-import functools
-import os
-from typing import Optional
+from typing import Optional, Union
 
-from dbt.clients import system
-from dbt.contracts.project import RegistryPackageMetadata, TarballPackage
-from dbt.deps.base import PinnedPackage, UnpinnedPackage, get_downloads_path
-from dbt.utils import _connection_exception_retry as connection_exception_retry
+from dbt.contracts.project import RegistryPackageMetadata, TarballPackage, RawVersion
+from dbt.deps.base import PinnedPackage, UnpinnedPackage
 
 
 class TarballPackageMixin:
@@ -26,7 +22,7 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         self,
         tarball: str,
         package: str,
-        version: Optional[str] = None,
+        version: Optional[RawVersion] = '',
     ) -> None:
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
@@ -68,7 +64,7 @@ class TarballUnpinnedPackage(TarballPackageMixin, UnpinnedPackage[TarballPinnedP
         self,
         tarball: str,
         package: str,
-        version: Optional[str] = None,
+        version: Optional[RawVersion] = '',
     ) -> None:
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
