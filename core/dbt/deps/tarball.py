@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional
 
 from dbt.contracts.project import RegistryPackageMetadata, TarballPackage, RawVersion
 from dbt.deps.base import PinnedPackage, UnpinnedPackage
@@ -22,7 +22,7 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         self,
         tarball: str,
         package: str,
-        version: Optional[RawVersion] = '',
+        version: Optional[RawVersion] = "",
     ) -> None:
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
@@ -64,7 +64,7 @@ class TarballUnpinnedPackage(TarballPackageMixin, UnpinnedPackage[TarballPinnedP
         self,
         tarball: str,
         package: str,
-        version: Optional[RawVersion] = '',
+        version: Optional[RawVersion] = "",
     ) -> None:
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
