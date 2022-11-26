@@ -37,7 +37,6 @@ class DepsTask(BaseTask):
         self, package_name: str, source_type: str, version: Optional[str]
     ) -> None:
         # Hub packages do not need to be hashed, as they are public
-        # Use the string 'local' for local and 'tarball' package versions
         if source_type == "local":
             package_name = dbt.utils.md5(package_name)
             version = "local"
