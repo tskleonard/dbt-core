@@ -100,13 +100,6 @@ class PinnedPackage(BasePackage):
         return None
 
     def _install(self, project, renderer):
-        """
-        verbatim from dbt.deps.registry.RegistryPinnedPackage
-            install() from RegistryPinnedPackage class
-            Q for dbt labs, is this an appropriate pattern to refactor against?
-            used upstream in RegistryPinnedPackage and TarballPinnedPackage via inheritance
-            can't overwrite install() since it would be inherited by GitPinnedPackage as well
-        """
         metadata = self.fetch_metadata(project, renderer)
 
         tar_name = "{}.{}.tar.gz".format(self.package, self.version)
@@ -123,13 +116,6 @@ class PinnedPackage(BasePackage):
         connection_exception_retry(download_untar_fn, 5)
 
     def download_and_untar(self, download_url, tar_path, deps_path, package_name):
-        """
-        verbatim from dbt.deps.registry.RegistryPinnedPackage
-            download_and_untar() from RegistryPinnedPackage class
-            Q for dbt labs, is this an appropriate pattern to refactor against?
-            used upstream in RegistryPinnedPackage and TarballPinnedPackage via inheritance
-        """
-
         """
         Sometimes the download of the files fails and we want to retry.  Sometimes the
         download appears successful but the file did not make it through as expected
