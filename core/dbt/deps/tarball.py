@@ -37,7 +37,7 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         return self.version
 
     def nice_version_name(self):
-        return "version {}".format(self.version)
+        return f"version {self.version}"
 
     def _fetch_metadata(self, project, renderer):
         """
