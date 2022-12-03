@@ -1,9 +1,7 @@
-from typing import Optional
-
-from dbt.contracts.project import RegistryPackageMetadata, TarballPackage, RawVersion
+from dbt.contracts.project import RegistryPackageMetadata, TarballPackage
 from dbt.deps.base import PinnedPackage, UnpinnedPackage
 
-
+    
 class TarballPackageMixin:
     def __init__(self, tarball: str) -> None:
         super().__init__()
@@ -21,13 +19,12 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
     def __init__(
         self,
         tarball: str,
-        package: str,
-        version: Optional[RawVersion] = "",
+        package: str
     ) -> None:
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
         self.package = package
-        self.version = version
+        self.version = ""
 
     @property
     def name(self):
@@ -37,7 +34,7 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         return self.version
 
     def nice_version_name(self):
-        return f"version {self.version}"
+        return f"Tarball (url: {self.tarball})"
 
     def _fetch_metadata(self, project, renderer):
         """
@@ -46,6 +43,9 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         build RegistryPackageMetadata from info passed via packages.yml since no
         'metadata' service exists in this case.
         """
+#        print(renderer.packages_dict)
+
+#        loaded = Project.from_project_root(path, renderer)
 
         dct = {
             "name": self.package,
@@ -64,27 +64,25 @@ class TarballUnpinnedPackage(TarballPackageMixin, UnpinnedPackage[TarballPinnedP
         self,
         tarball: str,
         package: str,
-        version: Optional[RawVersion] = "",
     ) -> None:
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
         self.package = package
-        self.version = version
+        self.version = ""
 
     @classmethod
     def from_contract(cls, contract: TarballPackage) -> "TarballUnpinnedPackage":
         return cls(
             tarball=contract.tarball,
-            package=contract.name,
-            version=contract.version,
+            package=contract.name
         )
 
     def incorporate(self, other: "TarballUnpinnedPackage") -> "TarballUnpinnedPackage":
         return TarballUnpinnedPackage(
-            tarball=self.tarball, package=self.package, version=self.version
+            tarball=self.tarball, package=self.package
         )
 
     def resolved(self) -> TarballPinnedPackage:
         return TarballPinnedPackage(
-            tarball=self.tarball, package=self.package, version=self.version
+            tarball=self.tarball, package=self.package
         )

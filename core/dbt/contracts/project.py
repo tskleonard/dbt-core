@@ -59,7 +59,6 @@ RawVersion = Union[str, float]
 class TarballPackage(Package):
     tarball: str
     name: str
-    version: Optional[RawVersion] = None
 
 
 @dataclass
