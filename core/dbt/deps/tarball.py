@@ -1,7 +1,7 @@
 from dbt.contracts.project import RegistryPackageMetadata, TarballPackage
 from dbt.deps.base import PinnedPackage, UnpinnedPackage
 
-    
+
 class TarballPackageMixin:
     def __init__(self, tarball: str) -> None:
         super().__init__()
@@ -16,11 +16,7 @@ class TarballPackageMixin:
 
 
 class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
-    def __init__(
-        self,
-        tarball: str,
-        package: str
-    ) -> None:
+    def __init__(self, tarball: str, package: str) -> None:
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
         self.package = package
@@ -43,9 +39,6 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         build RegistryPackageMetadata from info passed via packages.yml since no
         'metadata' service exists in this case.
         """
-#        print(renderer.packages_dict)
-
-#        loaded = Project.from_project_root(path, renderer)
 
         dct = {
             "name": self.package,
@@ -72,17 +65,10 @@ class TarballUnpinnedPackage(TarballPackageMixin, UnpinnedPackage[TarballPinnedP
 
     @classmethod
     def from_contract(cls, contract: TarballPackage) -> "TarballUnpinnedPackage":
-        return cls(
-            tarball=contract.tarball,
-            package=contract.name
-        )
+        return cls(tarball=contract.tarball, package=contract.name)
 
     def incorporate(self, other: "TarballUnpinnedPackage") -> "TarballUnpinnedPackage":
-        return TarballUnpinnedPackage(
-            tarball=self.tarball, package=self.package
-        )
+        return TarballUnpinnedPackage(tarball=self.tarball, package=self.package)
 
     def resolved(self) -> TarballPinnedPackage:
-        return TarballPinnedPackage(
-            tarball=self.tarball, package=self.package
-        )
+        return TarballPinnedPackage(tarball=self.tarball, package=self.package)
