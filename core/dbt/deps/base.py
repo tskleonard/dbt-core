@@ -3,6 +3,7 @@ import os
 import functools
 import tempfile
 from contextlib import contextmanager
+from pathlib import Path
 from typing import List, Optional, Generic, TypeVar
 
 from dbt.clients import system
@@ -102,16 +103,16 @@ class PinnedPackage(BasePackage):
     def _install(self, project, renderer):
         metadata = self.fetch_metadata(project, renderer)
 
-        tar_path = os.path.realpath(os.path.join(get_downloads_path(), tar_name))
-        system.make_directory(os.path.dirname(tar_path))
         tar_name = f"{self.package}.{self.version}.tar.gz"
+        tar_path = (Path(get_downloads_path()) / tar_name).resolve(strict=False)
+        system.make_directory(str(tar_path.parent))
 
         download_url = metadata.downloads.tarball
         deps_path = project.packages_install_path
         package_name = self.get_project_name(project, renderer)
 
         download_untar_fn = functools.partial(
-            self.download_and_untar, download_url, tar_path, deps_path, package_name
+            self.download_and_untar, download_url, str(tar_path), deps_path, package_name
         )
         connection_exception_retry(download_untar_fn, 5)
 
