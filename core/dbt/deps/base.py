@@ -102,9 +102,9 @@ class PinnedPackage(BasePackage):
     def _install(self, project, renderer):
         metadata = self.fetch_metadata(project, renderer)
 
-        tar_name = "{}.{}.tar.gz".format(self.package, self.version)
         tar_path = os.path.realpath(os.path.join(get_downloads_path(), tar_name))
         system.make_directory(os.path.dirname(tar_path))
+        tar_name = f"{self.package}.{self.version}.tar.gz"
 
         download_url = metadata.downloads.tarball
         deps_path = project.packages_install_path

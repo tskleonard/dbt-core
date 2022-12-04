@@ -20,7 +20,7 @@ class TarballPinnedPackage(TarballPackageMixin, PinnedPackage):
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
         self.package = package
-        self.version = ""
+        self.version = "tarball"
 
     @property
     def name(self):
@@ -61,7 +61,7 @@ class TarballUnpinnedPackage(TarballPackageMixin, UnpinnedPackage[TarballPinnedP
         super().__init__(tarball)
         # setup to recycle RegistryPinnedPackage fns
         self.package = package
-        self.version = ""
+        self.version = "tarball"
 
     @classmethod
     def from_contract(cls, contract: TarballPackage) -> "TarballUnpinnedPackage":
