@@ -42,8 +42,7 @@ class TestTarballPackage(unittest.TestCase):
 
         dict_well_formed_contract = (
             {'tarball': 'http://example.com', 
-             'name': 'my_cool_package',
-             'version': 123})
+             'name': 'my_cool_package'})
 
         a_contract = (
             TarballPackage.from_dict(dict_well_formed_contract))
@@ -51,20 +50,17 @@ class TestTarballPackage(unittest.TestCase):
         # check contract and resolver
         self.assertEqual(a_contract.tarball, 'http://example.com')
         self.assertEqual(a_contract.name, 'my_cool_package')
-        self.assertEqual(a_contract.version, 123)
 
         a = TarballUnpinnedPackage.from_contract(a_contract)
         self.assertEqual(a.tarball, 'http://example.com')
         self.assertEqual(a.package, 'my_cool_package')
-        self.assertEqual(a.version, 123)
         
         a_pinned = a.resolved()
         self.assertEqual(a_pinned.source_type(), 'tarball')
 
         # check bad contract (no name) fails
         dict_missing_name_should_fail_on_contract = (
-            {'tarball': 'http://example.com', 
-             'version': 123})
+            {'tarball': 'http://example.com'})
         
         with self.assertRaises(MissingField):
             TarballPackage.from_dict(dict_missing_name_should_fail_on_contract)
